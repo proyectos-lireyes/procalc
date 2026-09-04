@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Calculadora Multimoneda</string>
+    <string name="title_activity_main">Calculadora Multimoneda</string>
+    <string name="package_name">com.multicurrency.calculator</string>
+    <string name="custom_url_scheme">com.multicurrency.calculator</string>
+</resources>

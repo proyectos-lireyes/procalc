@@ -1,0 +1,6 @@
+{
+  "name": "Calculadora de Pagos Multimoneda",
+  "description": "Calculadora de pagos multimoneda y hoja de cálculo con tasas en tiempo real y offline (DolarAPI), funciones científicas, variables, historial y exportación de reportes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,9 @@
+{
+  "appId": "com.multicurrency.calculator",
+  "appName": "Calculadora Multimoneda",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  }
+}
