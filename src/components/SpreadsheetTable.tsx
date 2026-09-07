@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   Plus,
   Trash2,
@@ -13,6 +13,7 @@ import {
   ArrowRightLeft,
   Share2,
   Tag,
+  Keyboard,
 } from 'lucide-react';
 import {
   Sheet,
@@ -113,12 +114,69 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   const [quickPayerName, setQuickPayerName] = useState('');
   const [copiedTricount, setCopiedTricount] = useState(false);
 
+  // Virtual keypad for amount input and device keyboard for descriptions
+  const amountInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [showVirtualKeypad, setShowVirtualKeypad] = useState<boolean>(true);
+
+  // Helper to insert tokens into active row's amount
+  const handleInsertToken = (token: string) => {
+    if (token === 'Enter' || token === '↵ Enter' || token === '+ Fila') {
+      const newId = onAddRow(undefined, activeRowId || undefined);
+      if (newId && typeof newId === 'string') {
+        setActiveRowId(newId);
+        setTimeout(() => {
+          amountInputRefs.current[newId]?.focus();
+        }, 40);
+      }
+      return;
+    }
+
+    const targetRow = sheet.rows.find((r) => r.id === activeRowId) || sheet.rows[sheet.rows.length - 1];
+    if (!targetRow) return;
+
+    const input = amountInputRefs.current[targetRow.id];
+    const currentExpr = targetRow.expression || '';
+    const start = input ? input.selectionStart ?? currentExpr.length : currentExpr.length;
+    const end = input ? input.selectionEnd ?? currentExpr.length : currentExpr.length;
+
+    let updatedExpr = currentExpr;
+    let newCursorPos = start;
+
+    if (token === 'AC') {
+      updatedExpr = '';
+      newCursorPos = 0;
+    } else if (token === 'DEL') {
+      if (start === end) {
+        if (start > 0) {
+          updatedExpr = currentExpr.slice(0, start - 1) + currentExpr.slice(end);
+          newCursorPos = start - 1;
+        }
+      } else {
+        updatedExpr = currentExpr.slice(0, start) + currentExpr.slice(end);
+        newCursorPos = start;
+      }
+    } else {
+      updatedExpr = currentExpr.slice(0, start) + token + currentExpr.slice(end);
+      newCursorPos = start + token.length;
+    }
+
+    onUpdateRow(targetRow.id, { expression: updatedExpr });
+
+    setTimeout(() => {
+      if (input) {
+        input.focus();
+        input.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    }, 10);
+  };
+
   // Helper to add row below and auto-focus its amount input
   const handleEnterAddRow = (currentRowId: string) => {
     const newId = onAddRow(undefined, currentRowId);
     if (newId && typeof newId === 'string') {
+      setActiveRowId(newId);
       setTimeout(() => {
-        const el = document.getElementById(`amount-input-${newId}`) as HTMLInputElement | null;
+        const el = amountInputRefs.current[newId] || (document.getElementById(`amount-input-${newId}`) as HTMLInputElement | null);
         if (el) {
           el.focus();
           el.select();
@@ -686,6 +744,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                         <div className="flex-1 flex items-center gap-1 min-w-0">
                           <input
                             type="text"
+                            inputMode="text"
                             value={row.concept}
                             onChange={(e) => onUpdateRow(row.id, { concept: e.target.value })}
                             onFocus={() => setActiveRowId(row.id)}
@@ -717,8 +776,10 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                         {/* Campo Monto + Botón Modal de Divisa (Solo Símbolos) */}
                         <div className="flex items-center gap-1 shrink-0">
                           <input
+                            ref={(el) => (amountInputRefs.current[row.id] = el)}
                             id={`amount-input-${row.id}`}
                             type="text"
+                            inputMode="none"
                             value={row.expression}
                             onChange={(e) => onUpdateRow(row.id, { expression: e.target.value })}
                             onFocus={() => setActiveRowId(row.id)}
@@ -801,13 +862,28 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
 
       {/* 5. Spreadsheet Footer Toolbar */}
       <div className="p-2 sm:p-2.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 text-xs shrink-0">
-        <button
-          onClick={() => onAddRow()}
-          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all shadow-2xs cursor-pointer active:scale-95"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>+ Agregar Fila</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onAddRow()}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all shadow-2xs cursor-pointer active:scale-95"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>+ Agregar Fila</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowVirtualKeypad(!showVirtualKeypad)}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md font-bold text-xs transition-all cursor-pointer border ${
+              showVirtualKeypad
+                ? 'bg-indigo-50 border-indigo-300 text-indigo-800 shadow-2xs'
+                : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Teclado numérico táctil para ingresar montos"
+          >
+            <Keyboard className="w-3.5 h-3.5 text-indigo-600" />
+            <span>{showVirtualKeypad ? 'Ocultar Teclado' : 'Teclado Montos'}</span>
+          </button>
+        </div>
 
         {computedRows.length > 0 && (
           <div>
@@ -841,6 +917,161 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
           </div>
         )}
       </div>
+
+      {/* Teclado Virtual de la Calculadora Básica para Montos */}
+      {showVirtualKeypad && (
+        <div className="p-2 sm:p-2.5 bg-slate-100 border-t border-slate-200 shrink-0 shadow-inner">
+          <div className="grid grid-cols-5 gap-1.5 sm:gap-2 max-w-2xl mx-auto">
+            {/* Row 1: (, ), %, DEL, AC */}
+            <button
+              type="button"
+              onClick={() => handleInsertToken('(')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+            >
+              (
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken(')')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+            >
+              )
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken('%')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 shadow-2xs active:scale-95 flex items-center justify-center"
+            >
+              %
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken('DEL')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-100 hover:bg-rose-200 text-rose-800 active:scale-95 flex items-center justify-center"
+            >
+              DEL
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken('AC')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-200 hover:bg-rose-300 text-rose-900 active:scale-95 flex items-center justify-center"
+            >
+              AC
+            </button>
+
+            {/* Row 2: 7, 8, 9, /, * */}
+            {['7', '8', '9', '/', '*'].map((btn) => (
+              <button
+                key={btn}
+                type="button"
+                onClick={() => handleInsertToken(btn)}
+                className={`h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
+                  btn === '/' || btn === '*'
+                    ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
+                    : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
+                }`}
+              >
+                {btn === '/' ? '÷' : btn === '*' ? '×' : btn}
+              </button>
+            ))}
+
+            {/* Row 3: 4, 5, 6, -, + */}
+            {['4', '5', '6', '-', '+'].map((btn) => (
+              <button
+                key={btn}
+                type="button"
+                onClick={() => handleInsertToken(btn)}
+                className={`h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
+                  btn === '-' || btn === '+'
+                    ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
+                    : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
+                }`}
+              >
+                {btn}
+              </button>
+            ))}
+
+            {/* Row 4: 1, 2, 3, ans, Limpiar Fila */}
+            <button
+              type="button"
+              onClick={() => handleInsertToken('1')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+            >
+              1
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken('2')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+            >
+              2
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken('3')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+            >
+              3
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken('ans')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-100 hover:bg-indigo-200 text-indigo-900 active:scale-95 flex items-center justify-center"
+            >
+              Ans
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (activeRowId) onUpdateRow(activeRowId, { expression: '' });
+              }}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-xs font-bold transition-all cursor-pointer font-sans bg-rose-100 hover:bg-rose-200 text-rose-800 shadow-2xs flex items-center justify-center gap-1 active:scale-95"
+              title="Borrar monto de la fila activa"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Limpiar</span>
+            </button>
+
+            {/* Row 5: 0, 00, ., +, ↵ Enter */}
+            <button
+              type="button"
+              onClick={() => handleInsertToken('0')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+            >
+              0
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken('00')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+            >
+              00
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken('.')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+            >
+              .
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken('+')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-lg sm:text-xl font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 active:scale-95 flex items-center justify-center"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInsertToken('↵ Enter')}
+              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-700 hover:bg-indigo-600 text-white shadow-xs flex items-center justify-center gap-1 active:scale-95"
+              title="Nueva Fila (Enter)"
+            >
+              ↵ Enter
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 6. Grand Totals Fixed Summary Grid (Anclado/Fijo en la parte inferior) */}
       <footer className="sticky bottom-0 z-10 bg-slate-50/95 backdrop-blur-xs text-slate-800 p-2.5 sm:p-3 flex flex-col gap-2 border-t border-slate-200 shadow-md">

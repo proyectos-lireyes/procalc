@@ -59,7 +59,6 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
   const [showAsFraction, setShowAsFraction] = useState<boolean>(false);
   const [sciHistory, setSciHistory] = useState<string[]>([]);
   const [sciHistoryIdx, setSciHistoryIdx] = useState<number>(-1);
-  const [useDeviceKeyboard, setUseDeviceKeyboard] = useState<boolean>(false);
   const [rowToDelete, setRowToDelete] = useState<{
     id: string;
     lineNum: number;
@@ -514,38 +513,6 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
               Científica
             </button>
           </div>
-
-          {/* Selector de Teclado: App (Táctil) vs Celular (Nativo) */}
-          <button
-            type="button"
-            onClick={() => setUseDeviceKeyboard(!useDeviceKeyboard)}
-            className={`flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-bold transition-all cursor-pointer border ${
-              useDeviceKeyboard
-                ? 'bg-blue-50 border-blue-300 text-blue-800 shadow-2xs'
-                : calcMode === 'fx991es'
-                ? 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700'
-                : 'bg-white hover:bg-slate-50 border-slate-300 text-slate-700 shadow-2xs'
-            }`}
-            title={
-              useDeviceKeyboard
-                ? 'Números: Usando teclado de tu celular. Clic para usar el teclado táctil de la app.'
-                : 'Números: Usando teclado táctil de la app (el teclado del celular no te tapará la pantalla). Clic para permitir teclado del celular.'
-            }
-          >
-            {useDeviceKeyboard ? (
-              <>
-                <Smartphone className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                <span className="hidden xs:inline">Teclado:</span>
-                <span>Celular</span>
-              </>
-            ) : (
-              <>
-                <Keyboard className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                <span className="hidden xs:inline">Teclado:</span>
-                <span>Táctil App</span>
-              </>
-            )}
-          </button>
         </div>
 
         {!isInline && (
@@ -618,7 +585,7 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                         <input
                           ref={(el) => (exprInputRefs.current[row.id] = el)}
                           type="text"
-                          inputMode={useDeviceKeyboard ? 'decimal' : 'none'}
+                          inputMode="none"
                           value={row.expression}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -695,41 +662,41 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
           </div>
 
           {/* Basic Keypad with DEL, AC, Clear All and cursor-position insertion */}
-          <div className="p-2 sm:p-2.5 bg-slate-100 border-t border-slate-200 shrink-0">
-            <div className="grid grid-cols-5 gap-1.5 max-w-2xl mx-auto">
+          <div className="p-2 sm:p-3 bg-slate-100 border-t border-slate-200 shrink-0">
+            <div className="grid grid-cols-5 gap-1.5 sm:gap-2 max-w-2xl mx-auto">
               {/* Row 1: (, ), %, DEL, AC */}
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('(')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
               >
                 (
               </button>
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken(')')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
               >
                 )
               </button>
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('%')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 shadow-2xs"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 shadow-2xs active:scale-95 flex items-center justify-center"
               >
                 %
               </button>
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('DEL')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer font-mono bg-rose-100 hover:bg-rose-200 text-rose-800"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-100 hover:bg-rose-200 text-rose-800 active:scale-95 flex items-center justify-center"
               >
                 DEL
               </button>
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('AC')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer font-mono bg-rose-200 hover:bg-rose-300 text-rose-900"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-200 hover:bg-rose-300 text-rose-900 active:scale-95 flex items-center justify-center"
               >
                 AC
               </button>
@@ -740,9 +707,9 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                   key={btn}
                   type="button"
                   onClick={() => handleInsertBasicToken(btn)}
-                  className={`py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono ${
+                  className={`h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
                     btn === '/' || btn === '*'
-                      ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900'
+                      ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
                       : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
                   }`}
                 >
@@ -756,9 +723,9 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                   key={btn}
                   type="button"
                   onClick={() => handleInsertBasicToken(btn)}
-                  className={`py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono ${
+                  className={`h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
                     btn === '-' || btn === '+'
-                      ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900'
+                      ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
                       : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
                   }`}
                 >
@@ -770,35 +737,35 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('1')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
               >
                 1
               </button>
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('2')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
               >
                 2
               </button>
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('3')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
               >
                 3
               </button>
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('ans')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-100 hover:bg-indigo-200 text-indigo-900"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-100 hover:bg-indigo-200 text-indigo-900 active:scale-95 flex items-center justify-center"
               >
                 Ans
               </button>
               <button
                 type="button"
                 onClick={handleClearAllTape}
-                className="py-2 sm:py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer font-sans bg-rose-100 hover:bg-rose-200 text-rose-800 shadow-2xs flex items-center justify-center gap-1"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs font-bold transition-all cursor-pointer font-sans bg-rose-100 hover:bg-rose-200 text-rose-800 shadow-2xs flex items-center justify-center gap-1 active:scale-95"
                 title="Limpiar todas las filas de la cuenta"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -809,35 +776,35 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('0')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
               >
                 0
               </button>
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('00')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
               >
                 00
               </button>
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('.')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
               >
                 .
               </button>
               <button
                 type="button"
                 onClick={() => handleInsertBasicToken('+')}
-                className="py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-lg sm:text-xl font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 active:scale-95 flex items-center justify-center"
               >
                 +
               </button>
               <button
                 type="button"
                 onClick={() => handleAddRow()}
-                className="py-2 sm:py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer font-mono bg-indigo-700 hover:bg-indigo-600 text-white shadow-xs flex items-center justify-center gap-1"
+                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-700 hover:bg-indigo-600 text-white shadow-xs flex items-center justify-center gap-1 active:scale-95"
                 title="Nueva Fila (Enter)"
               >
                 ↵ Enter
@@ -890,7 +857,7 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                 <input
                   ref={sciInputRef}
                   type="text"
-                  inputMode={useDeviceKeyboard ? 'text' : 'none'}
+                  inputMode="none"
                   value={sciExpr}
                   onChange={(e) => setSciExpr(e.target.value)}
                   placeholder="0"
