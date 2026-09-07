@@ -20,6 +20,11 @@ import {
   AppReleaseInfo,
   checkGitHubRelease,
 } from '../services/updateService';
+import {
+  downloadAndInstallApkNative,
+  openNativeApkInstaller,
+  isNativeAndroidApp,
+} from '../utils/appUpdater';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -77,50 +82,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleDownloadApk = (url: string) => {
+  const handleDownloadAndInstall = async (url: string) => {
     if (downloadStatus === 'downloading') return;
 
     setDownloadStatus('downloading');
-    setDownloadProgress(15);
+    setDownloadProgress(10);
+    setUpdateError(null);
 
-    // Iniciar descarga silenciosa en el almacenamiento interno del dispositivo sin abrir pestaña externa
-    try {
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = url;
-      document.body.appendChild(iframe);
-      setTimeout(() => {
-        if (document.body.contains(iframe)) {
-          document.body.removeChild(iframe);
-        }
-      }, 60000);
-    } catch {
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', 'app-release.apk');
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+    const result = await downloadAndInstallApkNative(url, (progress) => {
+      setDownloadProgress(progress);
+    });
+
+    if (result.success) {
+      setDownloadProgress(100);
+      setDownloadStatus('completed');
+    } else {
+      setDownloadStatus('idle');
+      setUpdateError(result.error || 'No se pudo iniciar el instalador de Android');
     }
-
-    // Simulación de progreso de guardado en almacenamiento local
-    let progress = 20;
-    const interval = setInterval(() => {
-      progress += Math.floor(Math.random() * 15) + 12;
-      if (progress >= 100) {
-        progress = 100;
-        clearInterval(interval);
-        setDownloadProgress(100);
-        setDownloadStatus('completed');
-      } else {
-        setDownloadProgress(progress);
-      }
-    }, 380);
   };
 
-  const handleInstallUpdate = (url: string) => {
-    // Abre el paquete descargado en el instalador del sistema operativo
-    window.location.href = url;
+  const handleOpenInstallerAgain = async (url: string) => {
+    await openNativeApkInstaller(url);
   };
 
   const handleCustomRateChange = (curr: Currency, val: string) => {
@@ -447,11 +430,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {downloadStatus === 'idle' && (
                         <button
                           type="button"
-                          onClick={() => handleDownloadApk(releaseInfo.apkDownloadUrl)}
-                          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer shadow-2xs"
+                          onClick={() => handleDownloadAndInstall(releaseInfo.apkDownloadUrl)}
+                          className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer shadow-md"
                         >
-                          <Download className="w-4 h-4" />
-                          <span>Descargar APK al Almacenamiento</span>
+                          <Sparkles className="w-4 h-4 text-emerald-200" />
+                          <span>Instalar Actualización en la App</span>
                         </button>
                       )}
 
@@ -460,7 +443,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <div className="flex items-center justify-between text-xs">
                             <span className="font-semibold text-slate-800 flex items-center gap-1.5">
                               <RefreshCcw className="w-3.5 h-3.5 text-blue-600 animate-spin" />
-                              Descargando instalador en el dispositivo...
+                              Descargando e iniciando instalador...
                             </span>
                             <span className="font-mono font-bold text-blue-600">{downloadProgress}%</span>
                           </div>
@@ -471,36 +454,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             />
                           </div>
                           <p className="text-[10px] text-slate-500">
-                            Guardando paquete APK en tu carpeta de Descargas.
+                            El instalador nativo de Android se abrirá automáticamente en pantalla.
                           </p>
                         </div>
                       )}
 
                       {downloadStatus === 'completed' && (
                         <div className="space-y-2">
-                          <div className="p-2.5 rounded-lg bg-emerald-100/90 border border-emerald-300 text-emerald-950 text-xs flex items-center gap-2">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                            <div className="flex-1 min-w-0">
-                              <p className="font-bold">Instalador guardado en el almacenamiento</p>
-                              <p className="text-[10px] text-emerald-800">
-                                El archivo APK está listo en la carpeta Descargas de tu teléfono.
-                              </p>
+                          <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-950 text-xs space-y-1.5">
+                            <div className="flex items-center gap-2 font-bold text-emerald-900">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                              <span>Instalador de Android activado</span>
                             </div>
+                            <p className="text-[11px] text-slate-700 leading-relaxed">
+                              Acepta el mensaje en pantalla para actualizar la aplicación sin perder tus hojas ni tus datos.
+                            </p>
                           </div>
 
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => handleInstallUpdate(releaseInfo.apkDownloadUrl)}
+                              onClick={() => handleOpenInstallerAgain(releaseInfo.apkDownloadUrl)}
                               className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer shadow-md"
                             >
                               <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>Instalar Actualización Descargada</span>
+                              <span>Abrir Instalador de Nuevo</span>
                             </button>
 
                             <button
                               type="button"
-                              onClick={() => handleDownloadApk(releaseInfo.apkDownloadUrl)}
+                              onClick={() => handleDownloadAndInstall(releaseInfo.apkDownloadUrl)}
                               className="px-2.5 py-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 text-xs font-semibold transition-all cursor-pointer"
                               title="Volver a descargar"
                             >
@@ -510,9 +493,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </div>
                       )}
 
-                      <p className="text-[10px] text-slate-500 pt-0.5">
-                        ℹ️ La descarga se realiza internamente. Al pulsar &quot;Instalar Actualización Descargada&quot; se actualizará la aplicación manteniendo todas tus hojas y datos.
-                      </p>
+                      {downloadStatus !== 'completed' && (
+                        <p className="text-[10px] text-slate-500 pt-0.5">
+                          ℹ️ La descarga se realiza dentro de la app y abre directamente el instalador de Android manteniendo intactas todas tus hojas de cálculo, tasas y configuraciones.
+                        </p>
+                      )}
                     </div>
                   ) : (
                     <p className="text-[11px] text-blue-900/80 pt-0.5 font-medium">
