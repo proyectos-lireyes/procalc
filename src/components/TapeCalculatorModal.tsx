@@ -667,7 +667,7 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
           {!isNativeKeyboardOpen && (
             <div className="p-2 sm:p-3 bg-slate-100 border-t border-slate-200 shrink-0">
               <div className="grid grid-cols-5 gap-1.5 sm:gap-2 max-w-2xl mx-auto">
-                {/* Row 1: (, ), %, DEL, AC */}
+                {/* Row 1: (, ), %, AC, DEL */}
                 <button
                   type="button"
                   onClick={() => handleInsertBasicToken('(')}
@@ -691,17 +691,17 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleInsertBasicToken('DEL')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-100 hover:bg-rose-200 text-rose-800 active:scale-95 flex items-center justify-center"
-                >
-                  DEL
-                </button>
-                <button
-                  type="button"
                   onClick={() => handleInsertBasicToken('AC')}
                   className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-200 hover:bg-rose-300 text-rose-900 active:scale-95 flex items-center justify-center"
                 >
                   AC
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('DEL')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-100 hover:bg-rose-200 text-rose-800 active:scale-95 flex items-center justify-center"
+                >
+                  DEL
                 </button>
 
                 {/* Row 2: 7, 8, 9, /, * */}
@@ -775,20 +775,20 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                   <span>Limpiar</span>
                 </button>
 
-                {/* Row 5: 0, 00, ., +, ↵ Enter */}
-                <button
-                  type="button"
-                  onClick={() => handleInsertBasicToken('0')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-                >
-                  0
-                </button>
+                {/* Row 5: 00, 0, ., +, ↵ Enter */}
                 <button
                   type="button"
                   onClick={() => handleInsertBasicToken('00')}
                   className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
                 >
                   00
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('0')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+                >
+                  0
                 </button>
                 <button
                   type="button"
@@ -1117,17 +1117,17 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleInsertSciToken('DEL')}
-                  className="py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded font-bold text-xs"
-                >
-                  DEL
-                </button>
-                <button
-                  type="button"
                   onClick={() => handleInsertSciToken('AC')}
                   className="py-2.5 bg-rose-700 hover:bg-rose-600 text-white rounded font-bold text-xs"
                 >
                   AC
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertSciToken('DEL')}
+                  className="py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded font-bold text-xs"
+                >
+                  DEL
                 </button>
 
                 <button
