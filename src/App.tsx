@@ -34,6 +34,7 @@ import { ExportReportModal } from './components/ExportReportModal';
 import { QuickConverterModal } from './components/QuickConverterModal';
 import { TapeCalculatorModal } from './components/TapeCalculatorModal';
 import { ClosedSheetsModal } from './components/ClosedSheetsModal';
+import { checkGitHubRelease, AppReleaseInfo, DEFAULT_GITHUB_REPO } from './services/updateService';
 
 const STORAGE_SHEETS_KEY = 'multicurrency_sheets_v3';
 const STORAGE_CLOSED_SHEETS_KEY = 'multicurrency_closed_sheets_v3';
@@ -158,6 +159,37 @@ export default function App() {
   const [isTricountOpen, setIsTricountOpen] = useState(false);
   const [isTapeCalcOpen, setIsTapeCalcOpen] = useState(false);
   const [isClosedSheetsOpen, setIsClosedSheetsOpen] = useState(false);
+
+  // Update check states (startup verification & notification dot)
+  const [hasUpdateNotification, setHasUpdateNotification] = useState<boolean>(false);
+  const [startupReleaseInfo, setStartupReleaseInfo] = useState<AppReleaseInfo | null>(null);
+
+  // Auto-comprobación de nueva versión al iniciar la aplicación
+  useEffect(() => {
+    let isMounted = true;
+    const checkUpdateSilently = async () => {
+      try {
+        const repo = settings.githubRepo || DEFAULT_GITHUB_REPO;
+        const info = await checkGitHubRelease(repo);
+        if (isMounted && info.hasUpdate) {
+          setHasUpdateNotification(true);
+          setStartupReleaseInfo(info);
+        }
+      } catch (err) {
+        // En arranque, omitir errores de red o temporales silenciosamente
+        console.warn('Chequeo automático de actualización:', err);
+      }
+    };
+
+    const timer = setTimeout(() => {
+      checkUpdateSilently();
+    }, 1200);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [settings.githubRepo]);
 
   // Save sheets to localStorage
   useEffect(() => {
@@ -780,6 +812,8 @@ export default function App() {
           }));
           loadRates();
         }}
+        initialReleaseInfo={startupReleaseInfo}
+        hasUpdateNotification={hasUpdateNotification}
       />
 
       <HistoryModal
@@ -842,9 +876,18 @@ export default function App() {
 
         <button
           onClick={() => setIsSettingsOpen(true)}
-          className="flex flex-col items-center justify-center py-0.5 px-3 rounded-lg text-slate-500 hover:text-slate-800 cursor-pointer transition-colors"
+          className="relative flex flex-col items-center justify-center py-0.5 px-3 rounded-lg text-slate-500 hover:text-slate-800 cursor-pointer transition-colors"
+          title={hasUpdateNotification ? 'Hay una nueva versión disponible' : 'Ajustes'}
         >
-          <Settings className="w-4 h-4" />
+          <div className="relative">
+            <Settings className="w-4 h-4" />
+            {hasUpdateNotification && (
+              <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 ring-2 ring-white"></span>
+              </span>
+            )}
+          </div>
           <span className="text-[10px] leading-tight">Ajustes</span>
         </button>
       </nav>

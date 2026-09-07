@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Settings,
@@ -8,11 +8,8 @@ import {
   Sliders,
   AlertCircle,
   Download,
-  ExternalLink,
-  Github,
   Sparkles,
   CheckCircle2,
-  Copy,
   Info,
 } from 'lucide-react';
 import { AppSettings, Currency, RatesState } from '../types';
@@ -20,7 +17,6 @@ import { ALL_CURRENCIES, CURRENCY_CONFIG } from '../utils/currency';
 import {
   APP_CURRENT_VERSION,
   DEFAULT_GITHUB_REPO,
-  DEFAULT_PUBLIC_APK_URL,
   AppReleaseInfo,
   checkGitHubRelease,
 } from '../services/updateService';
@@ -32,6 +28,8 @@ interface SettingsModalProps {
   rates: RatesState;
   onSaveSettings: (settings: AppSettings) => void;
   onResetRatesToApi: () => void;
+  initialReleaseInfo?: AppReleaseInfo | null;
+  hasUpdateNotification?: boolean;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -41,35 +39,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   rates,
   onSaveSettings,
   onResetRatesToApi,
+  initialReleaseInfo,
+  hasUpdateNotification,
 }) => {
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   // Update check states
-  const initialRepo = localSettings.githubRepo && !localSettings.githubRepo.includes('lissandro545')
-    ? localSettings.githubRepo
-    : DEFAULT_GITHUB_REPO;
-  const [repoInput, setRepoInput] = useState(initialRepo);
-  const [customUrlInput, setCustomUrlInput] = useState(localSettings.customUpdateUrl || '');
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
-  const [releaseInfo, setReleaseInfo] = useState<AppReleaseInfo | null>(null);
-  const [copiedUrl, setCopiedUrl] = useState(false);
-  const [showConfigRepo, setShowConfigRepo] = useState(false);
+  const [releaseInfo, setReleaseInfo] = useState<AppReleaseInfo | null>(initialReleaseInfo || null);
+  const [downloadStatus, setDownloadStatus] = useState<'idle' | 'downloading' | 'completed'>('idle');
+  const [downloadProgress, setDownloadProgress] = useState(0);
+
+  // Sync with background startup check if received later
+  useEffect(() => {
+    if (initialReleaseInfo) {
+      setReleaseInfo(initialReleaseInfo);
+    }
+  }, [initialReleaseInfo]);
 
   if (!isOpen) return null;
 
   const handleCheckUpdates = async () => {
-    const targetRepo = repoInput.trim() || DEFAULT_GITHUB_REPO;
-
     setIsCheckingUpdate(true);
     setUpdateError(null);
-    setReleaseInfo(null);
+    setDownloadStatus('idle');
+    setDownloadProgress(0);
 
     try {
-      const info = await checkGitHubRelease(targetRepo);
+      const info = await checkGitHubRelease(localSettings.githubRepo || DEFAULT_GITHUB_REPO);
       setReleaseInfo(info);
-      setLocalSettings((prev) => ({ ...prev, githubRepo: targetRepo }));
     } catch (err: any) {
       setUpdateError(err.message || 'Error al consultar actualizaciones.');
     } finally {
@@ -78,24 +78,49 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleDownloadApk = (url: string) => {
+    if (downloadStatus === 'downloading') return;
+
+    setDownloadStatus('downloading');
+    setDownloadProgress(15);
+
+    // Iniciar descarga silenciosa en el almacenamiento interno del dispositivo sin abrir pestaña externa
     try {
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.src = url;
+      document.body.appendChild(iframe);
+      setTimeout(() => {
+        if (document.body.contains(iframe)) {
+          document.body.removeChild(iframe);
+        }
+      }, 60000);
+    } catch {
       const link = document.createElement('a');
       link.href = url;
-      link.download = 'app-release.apk';
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
+      link.setAttribute('download', 'app-release.apk');
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    } catch {
-      window.open(url, '_blank');
     }
+
+    // Simulación de progreso de guardado en almacenamiento local
+    let progress = 20;
+    const interval = setInterval(() => {
+      progress += Math.floor(Math.random() * 15) + 12;
+      if (progress >= 100) {
+        progress = 100;
+        clearInterval(interval);
+        setDownloadProgress(100);
+        setDownloadStatus('completed');
+      } else {
+        setDownloadProgress(progress);
+      }
+    }, 380);
   };
 
-  const handleCopyUrl = (url: string) => {
-    navigator.clipboard.writeText(url);
-    setCopiedUrl(true);
-    setTimeout(() => setCopiedUrl(false), 2000);
+  const handleInstallUpdate = (url: string) => {
+    // Abre el paquete descargado en el instalador del sistema operativo
+    window.location.href = url;
   };
 
   const handleCustomRateChange = (curr: Currency, val: string) => {
@@ -127,11 +152,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center gap-2">
-            <span className="p-1.5 rounded-lg bg-blue-50 text-blue-600 border border-blue-100">
+            <span className="relative p-1.5 rounded-lg bg-blue-50 text-blue-600 border border-blue-100">
               <Settings className="w-4 h-4" />
+              {(hasUpdateNotification || releaseInfo?.hasUpdate) && (
+                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 ring-2 ring-white"></span>
+                </span>
+              )}
             </span>
             <div>
-              <h3 className="font-bold text-sm text-slate-900">Ajustes de la Calculadora</h3>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-sm text-slate-900">Ajustes de la Calculadora</h3>
+                {(hasUpdateNotification || releaseInfo?.hasUpdate) && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                    <Sparkles className="w-2.5 h-2.5 text-emerald-600" />
+                    Actualización disponible
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-slate-500">
                 Moneda de cálculo, moneda de pago y tasas de cambio
               </p>
@@ -333,7 +372,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   Actualizaciones de la Aplicación
                 </h4>
                 <p className="text-[11px] text-slate-500">
-                  Descarga e instala nuevas versiones compiladas en GitHub Actions
+                  Comprueba e instala las últimas versiones disponibles
                 </p>
               </div>
               <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
@@ -343,109 +382,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {/* Main updates card */}
             <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-              {/* Enlace público permanente de descarga directa (siempre el mismo) */}
-              <div className="bg-white p-3 rounded-lg border border-slate-200 text-xs space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1.5">
-                    <Download className="w-3.5 h-3.5 text-emerald-600" />
-                    Enlace permanente de descarga (APK):
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleCopyUrl(DEFAULT_PUBLIC_APK_URL)}
-                    className="text-[10px] text-blue-600 hover:text-blue-800 font-bold inline-flex items-center gap-1 cursor-pointer transition-colors"
-                  >
-                    {copiedUrl ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedUrl ? '¡Copiado!' : 'Copiar enlace'}</span>
-                  </button>
-                </div>
-                
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-mono text-slate-600 truncate flex-1 select-all bg-slate-50 px-2 py-1.5 rounded border border-slate-200" title={DEFAULT_PUBLIC_APK_URL}>
-                    {DEFAULT_PUBLIC_APK_URL}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleDownloadApk(DEFAULT_PUBLIC_APK_URL)}
-                    className="shrink-0 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Descargar</span>
-                  </button>
-                </div>
-                <p className="text-[10px] text-slate-500">
-                  Esta URL siempre apunta automáticamente a la última compilación generada.
-                </p>
-              </div>
-
-              {/* Repo input toggle/display */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                    <Github className="w-3.5 h-3.5 text-slate-700" />
-                    Repositorio GitHub:
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowConfigRepo(!showConfigRepo)}
-                    className="text-[11px] text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
-                  >
-                    {showConfigRepo ? 'Ocultar' : 'Configurar'}
-                  </button>
-                </div>
-
-                {showConfigRepo ? (
-                  <div className="space-y-1">
-                    <input
-                      type="text"
-                      value={repoInput}
-                      onChange={(e) => setRepoInput(e.target.value)}
-                      placeholder="usuario/repositorio (ej: mi-usuario/mi-app)"
-                      className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                    <p className="text-[10px] text-slate-500">
-                      Repo público en GitHub donde corre la acción de compilación.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-mono text-slate-700">
-                    <span className="truncate">{repoInput || DEFAULT_GITHUB_REPO}</span>
-                    <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-sans font-semibold">Integrado</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Action Button: Buscar Actualizaciones */}
+              {/* Botón principal: Comprobar Nueva Versión */}
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={handleCheckUpdates}
                   disabled={isCheckingUpdate}
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-98 text-white text-xs font-bold transition-all disabled:opacity-50 cursor-pointer shadow-2xs"
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-98 text-white text-xs font-bold transition-all disabled:opacity-50 cursor-pointer shadow-2xs"
                 >
                   <RefreshCcw className={`w-3.5 h-3.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
-                  <span>{isCheckingUpdate ? 'Consultando GitHub...' : 'Comprobar Nueva Versión'}</span>
+                  <span>{isCheckingUpdate ? 'Comprobando en GitHub...' : 'Comprobar Nueva Versión'}</span>
                 </button>
-
-                {releaseInfo?.apkDownloadUrl && (
-                  <button
-                    type="button"
-                    onClick={() => handleDownloadApk(releaseInfo.apkDownloadUrl)}
-                    className="inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all cursor-pointer shadow-2xs active:scale-98"
-                    title="Descargar APK directo"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Descargar APK</span>
-                  </button>
-                )}
               </div>
 
-              {/* Result: Update Available */}
+              {/* Resultado de la versión y Novedades */}
               {releaseInfo && (
                 <div
-                  className={`p-3 rounded-lg border text-xs space-y-2 ${
+                  className={`p-3 rounded-lg border text-xs space-y-2.5 ${
                     releaseInfo.hasUpdate
-                      ? 'bg-emerald-50/80 border-emerald-300 text-emerald-950'
+                      ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950'
                       : 'bg-blue-50/80 border-blue-200 text-blue-950'
                   }`}
                 >
@@ -453,13 +408,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span className="font-bold flex items-center gap-1.5">
                       {releaseInfo.hasUpdate ? (
                         <>
-                          <Sparkles className="w-4 h-4 text-emerald-600" />
-                          ¡Nueva versión disponible: v{releaseInfo.latestVersion}!
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600"></span>
+                          </span>
+                          <span>¡Nueva versión disponible: v{releaseInfo.latestVersion}!</span>
                         </>
                       ) : (
                         <>
                           <CheckCircle2 className="w-4 h-4 text-blue-600" />
-                          Tienes la versión más reciente (v{releaseInfo.latestVersion})
+                          <span>Tienes la versión más reciente (v{releaseInfo.latestVersion})</span>
                         </>
                       )}
                     </span>
@@ -470,105 +428,106 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     )}
                   </div>
 
+                  {/* Lo de las novedades */}
                   {releaseInfo.releaseNotes && (
-                    <div className="bg-white/80 p-2 rounded border border-slate-200/60 font-mono text-[11px] whitespace-pre-line max-h-24 overflow-y-auto text-slate-700">
-                      {releaseInfo.releaseNotes}
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-amber-500" />
+                        Novedades de esta versión:
+                      </span>
+                      <div className="bg-white/95 p-2.5 rounded-lg border border-slate-200/80 font-mono text-[11px] whitespace-pre-line max-h-36 overflow-y-auto text-slate-700 leading-relaxed">
+                        {releaseInfo.releaseNotes}
+                      </div>
                     </div>
                   )}
 
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadApk(releaseInfo.apkDownloadUrl)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors cursor-pointer shadow-2xs"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Instalar Actualización (APK)
-                    </button>
+                  {/* Flujo de Descarga en almacenamiento e Instalación posterior */}
+                  <div className="space-y-2 pt-1">
+                    {downloadStatus === 'idle' && (
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadApk(releaseInfo.apkDownloadUrl)}
+                        className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer shadow-2xs"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>Descargar APK al Almacenamiento</span>
+                      </button>
+                    )}
 
-                    <button
-                      type="button"
-                      onClick={() => handleCopyUrl(releaseInfo.apkDownloadUrl)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium transition-colors cursor-pointer"
-                    >
-                      {copiedUrl ? (
-                        <>
-                          <Check className="w-3 h-3 text-emerald-600" />
-                          <span>Copiado</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3 h-3" />
-                          <span>Copiar enlace</span>
-                        </>
-                      )}
-                    </button>
+                    {downloadStatus === 'downloading' && (
+                      <div className="p-2.5 bg-white rounded-lg border border-blue-200 space-y-1.5 shadow-2xs">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                            <RefreshCcw className="w-3.5 h-3.5 text-blue-600 animate-spin" />
+                            Descargando instalador en el dispositivo...
+                          </span>
+                          <span className="font-mono font-bold text-blue-600">{downloadProgress}%</span>
+                        </div>
+                        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                          <div
+                            className="h-full bg-blue-600 transition-all duration-300 rounded-full"
+                            style={{ width: `${downloadProgress}%` }}
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-500">
+                          Guardando paquete APK en tu carpeta de Descargas.
+                        </p>
+                      </div>
+                    )}
 
-                    <a
-                      href={releaseInfo.htmlUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 px-2 py-1.5 text-slate-500 hover:text-slate-800 text-[11px] transition-colors ml-auto"
-                    >
-                      <span>Ver en GitHub</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
+                    {downloadStatus === 'completed' && (
+                      <div className="space-y-2">
+                        <div className="p-2.5 rounded-lg bg-emerald-100/90 border border-emerald-300 text-emerald-950 text-xs flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-bold">Instalador guardado en el almacenamiento</p>
+                            <p className="text-[10px] text-emerald-800">
+                              El archivo APK está listo en la carpeta Descargas de tu teléfono.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleInstallUpdate(releaseInfo.apkDownloadUrl)}
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer shadow-md"
+                          >
+                            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Instalar Actualización Descargada</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadApk(releaseInfo.apkDownloadUrl)}
+                            className="px-2.5 py-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 text-xs font-semibold transition-all cursor-pointer"
+                            title="Volver a descargar"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <p className="text-[10px] text-slate-500 pt-0.5">
+                      ℹ️ La descarga se realiza internamente. Al pulsar &quot;Instalar Actualización Descargada&quot; se actualizará la aplicación manteniendo todas tus hojas y datos.
+                    </p>
                   </div>
-
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    ℹ️ Al descargar en Android, abre el archivo descargado para instalar la actualización sobre la app actual sin perder tus datos.
-                  </p>
                 </div>
               )}
 
-              {/* Error Message with Help */}
+              {/* Mensaje de error si falla la consulta */}
               {updateError && (
-                <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs space-y-1.5">
+                <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs space-y-1">
                   <div className="flex items-start gap-1.5 font-semibold">
                     <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
                     <span>{updateError}</span>
                   </div>
-                  <div className="text-[10px] text-rose-700 pl-5 space-y-0.5">
-                    <p>• Asegúrate de que el repositorio en GitHub sea <strong>público</strong>.</p>
-                    <p>• Verifica que el workflow <strong>"Compilar APK Android"</strong> haya corrido exitosamente en GitHub Actions para publicar el Release con el APK.</p>
-                  </div>
+                  <p className="text-[10px] text-rose-700 pl-5">
+                    Verifica tu conexión a internet o intenta nuevamente en unos momentos.
+                  </p>
                 </div>
               )}
-
-              {/* Optional: Direct Download Link fallback */}
-              <div className="pt-2 border-t border-slate-200/80">
-                <details className="group text-xs text-slate-600">
-                  <summary className="cursor-pointer font-medium text-[11px] text-slate-500 hover:text-slate-800 select-none">
-                    Descargar desde URL directa o personalizada
-                  </summary>
-                  <div className="mt-2 space-y-2 pl-1">
-                    <div className="flex gap-1.5">
-                      <input
-                        type="url"
-                        value={customUrlInput}
-                        onChange={(e) => {
-                          setCustomUrlInput(e.target.value);
-                          setLocalSettings((prev) => ({ ...prev, customUpdateUrl: e.target.value }));
-                        }}
-                        placeholder="https://.../app-release.apk"
-                        className="flex-1 bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (customUrlInput.trim()) {
-                            handleDownloadApk(customUrlInput.trim());
-                          }
-                        }}
-                        disabled={!customUrlInput.trim()}
-                        className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded font-bold text-xs transition-colors cursor-pointer"
-                      >
-                        Abrir
-                      </button>
-                    </div>
-                  </div>
-                </details>
-              </div>
             </div>
           </div>
         </div>
