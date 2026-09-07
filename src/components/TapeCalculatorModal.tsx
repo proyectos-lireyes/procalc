@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { evaluateExpression } from '../utils/mathEvaluator';
 import { formatNumber } from '../utils/currency';
+import { useVirtualKeyboard } from '../utils/useVirtualKeyboard';
 
 interface TapeCalculatorModalProps {
   isOpen: boolean;
@@ -47,6 +48,7 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
 
   // Active focused row in basic mode
   const [activeRowId, setActiveRowId] = useState<string>(INITIAL_ROWS[0].id);
+  const isNativeKeyboardOpen = useVirtualKeyboard();
 
   // Input refs for automatic focus
   const exprInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -662,155 +664,157 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
           </div>
 
           {/* Basic Keypad with DEL, AC, Clear All and cursor-position insertion */}
-          <div className="p-2 sm:p-3 bg-slate-100 border-t border-slate-200 shrink-0">
-            <div className="grid grid-cols-5 gap-1.5 sm:gap-2 max-w-2xl mx-auto">
-              {/* Row 1: (, ), %, DEL, AC */}
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('(')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-              >
-                (
-              </button>
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken(')')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-              >
-                )
-              </button>
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('%')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 shadow-2xs active:scale-95 flex items-center justify-center"
-              >
-                %
-              </button>
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('DEL')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-100 hover:bg-rose-200 text-rose-800 active:scale-95 flex items-center justify-center"
-              >
-                DEL
-              </button>
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('AC')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-200 hover:bg-rose-300 text-rose-900 active:scale-95 flex items-center justify-center"
-              >
-                AC
-              </button>
-
-              {/* Row 2: 7, 8, 9, /, * */}
-              {['7', '8', '9', '/', '*'].map((btn) => (
+          {!isNativeKeyboardOpen && (
+            <div className="p-2 sm:p-3 bg-slate-100 border-t border-slate-200 shrink-0">
+              <div className="grid grid-cols-5 gap-1.5 sm:gap-2 max-w-2xl mx-auto">
+                {/* Row 1: (, ), %, DEL, AC */}
                 <button
-                  key={btn}
                   type="button"
-                  onClick={() => handleInsertBasicToken(btn)}
-                  className={`h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
-                    btn === '/' || btn === '*'
-                      ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
-                      : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
-                  }`}
+                  onClick={() => handleInsertBasicToken('(')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
                 >
-                  {btn === '/' ? '÷' : btn === '*' ? '×' : btn}
+                  (
                 </button>
-              ))}
-
-              {/* Row 3: 4, 5, 6, -, + */}
-              {['4', '5', '6', '-', '+'].map((btn) => (
                 <button
-                  key={btn}
                   type="button"
-                  onClick={() => handleInsertBasicToken(btn)}
-                  className={`h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
-                    btn === '-' || btn === '+'
-                      ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
-                      : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
-                  }`}
+                  onClick={() => handleInsertBasicToken(')')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
                 >
-                  {btn}
+                  )
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('%')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 shadow-2xs active:scale-95 flex items-center justify-center"
+                >
+                  %
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('DEL')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-100 hover:bg-rose-200 text-rose-800 active:scale-95 flex items-center justify-center"
+                >
+                  DEL
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('AC')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-200 hover:bg-rose-300 text-rose-900 active:scale-95 flex items-center justify-center"
+                >
+                  AC
+                </button>
 
-              {/* Row 4: 1, 2, 3, Ans, Limpiar Todo */}
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('1')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-              >
-                1
-              </button>
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('2')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-              >
-                2
-              </button>
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('3')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-              >
-                3
-              </button>
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('ans')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-100 hover:bg-indigo-200 text-indigo-900 active:scale-95 flex items-center justify-center"
-              >
-                Ans
-              </button>
-              <button
-                type="button"
-                onClick={handleClearAllTape}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs font-bold transition-all cursor-pointer font-sans bg-rose-100 hover:bg-rose-200 text-rose-800 shadow-2xs flex items-center justify-center gap-1 active:scale-95"
-                title="Limpiar todas las filas de la cuenta"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Limpiar</span>
-              </button>
+                {/* Row 2: 7, 8, 9, /, * */}
+                {['7', '8', '9', '/', '*'].map((btn) => (
+                  <button
+                    key={btn}
+                    type="button"
+                    onClick={() => handleInsertBasicToken(btn)}
+                    className={`h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
+                      btn === '/' || btn === '*'
+                        ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
+                        : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
+                    }`}
+                  >
+                    {btn === '/' ? '÷' : btn === '*' ? '×' : btn}
+                  </button>
+                ))}
 
-              {/* Row 5: 0, 00, ., +, ↵ Enter */}
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('0')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-              >
-                0
-              </button>
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('00')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-              >
-                00
-              </button>
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('.')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-              >
-                .
-              </button>
-              <button
-                type="button"
-                onClick={() => handleInsertBasicToken('+')}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-lg sm:text-xl font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 active:scale-95 flex items-center justify-center"
-              >
-                +
-              </button>
-              <button
-                type="button"
-                onClick={() => handleAddRow()}
-                className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-700 hover:bg-indigo-600 text-white shadow-xs flex items-center justify-center gap-1 active:scale-95"
-                title="Nueva Fila (Enter)"
-              >
-                ↵ Enter
-              </button>
+                {/* Row 3: 4, 5, 6, -, + */}
+                {['4', '5', '6', '-', '+'].map((btn) => (
+                  <button
+                    key={btn}
+                    type="button"
+                    onClick={() => handleInsertBasicToken(btn)}
+                    className={`h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
+                      btn === '-' || btn === '+'
+                        ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
+                        : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
+                    }`}
+                  >
+                    {btn}
+                  </button>
+                ))}
+
+                {/* Row 4: 1, 2, 3, Ans, Limpiar Todo */}
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('1')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+                >
+                  1
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('2')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+                >
+                  2
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('3')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+                >
+                  3
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('ans')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-100 hover:bg-indigo-200 text-indigo-900 active:scale-95 flex items-center justify-center"
+                >
+                  Ans
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearAllTape}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs font-bold transition-all cursor-pointer font-sans bg-rose-100 hover:bg-rose-200 text-rose-800 shadow-2xs flex items-center justify-center gap-1 active:scale-95"
+                  title="Limpiar todas las filas de la cuenta"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Limpiar</span>
+                </button>
+
+                {/* Row 5: 0, 00, ., +, ↵ Enter */}
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('0')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+                >
+                  0
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('00')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+                >
+                  00
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('.')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+                >
+                  .
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInsertBasicToken('+')}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-lg sm:text-xl font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 active:scale-95 flex items-center justify-center"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAddRow()}
+                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-700 hover:bg-indigo-600 text-white shadow-xs flex items-center justify-center gap-1 active:scale-95"
+                  title="Nueva Fila (Enter)"
+                >
+                  ↵ Enter
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 

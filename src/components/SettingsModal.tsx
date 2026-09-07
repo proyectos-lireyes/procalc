@@ -441,78 +441,84 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   )}
 
-                  {/* Flujo de Descarga en almacenamiento e Instalación posterior */}
-                  <div className="space-y-2 pt-1">
-                    {downloadStatus === 'idle' && (
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadApk(releaseInfo.apkDownloadUrl)}
-                        className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer shadow-2xs"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>Descargar APK al Almacenamiento</span>
-                      </button>
-                    )}
+                  {/* Flujo de Descarga en almacenamiento e Instalación posterior (Solo si hay nueva versión) */}
+                  {releaseInfo.hasUpdate ? (
+                    <div className="space-y-2 pt-1">
+                      {downloadStatus === 'idle' && (
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadApk(releaseInfo.apkDownloadUrl)}
+                          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer shadow-2xs"
+                        >
+                          <Download className="w-4 h-4" />
+                          <span>Descargar APK al Almacenamiento</span>
+                        </button>
+                      )}
 
-                    {downloadStatus === 'downloading' && (
-                      <div className="p-2.5 bg-white rounded-lg border border-blue-200 space-y-1.5 shadow-2xs">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-slate-800 flex items-center gap-1.5">
-                            <RefreshCcw className="w-3.5 h-3.5 text-blue-600 animate-spin" />
-                            Descargando instalador en el dispositivo...
-                          </span>
-                          <span className="font-mono font-bold text-blue-600">{downloadProgress}%</span>
+                      {downloadStatus === 'downloading' && (
+                        <div className="p-2.5 bg-white rounded-lg border border-blue-200 space-y-1.5 shadow-2xs">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                              <RefreshCcw className="w-3.5 h-3.5 text-blue-600 animate-spin" />
+                              Descargando instalador en el dispositivo...
+                            </span>
+                            <span className="font-mono font-bold text-blue-600">{downloadProgress}%</span>
+                          </div>
+                          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                            <div
+                              className="h-full bg-blue-600 transition-all duration-300 rounded-full"
+                              style={{ width: `${downloadProgress}%` }}
+                            />
+                          </div>
+                          <p className="text-[10px] text-slate-500">
+                            Guardando paquete APK en tu carpeta de Descargas.
+                          </p>
                         </div>
-                        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
-                          <div
-                            className="h-full bg-blue-600 transition-all duration-300 rounded-full"
-                            style={{ width: `${downloadProgress}%` }}
-                          />
-                        </div>
-                        <p className="text-[10px] text-slate-500">
-                          Guardando paquete APK en tu carpeta de Descargas.
-                        </p>
-                      </div>
-                    )}
+                      )}
 
-                    {downloadStatus === 'completed' && (
-                      <div className="space-y-2">
-                        <div className="p-2.5 rounded-lg bg-emerald-100/90 border border-emerald-300 text-emerald-950 text-xs flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <p className="font-bold">Instalador guardado en el almacenamiento</p>
-                            <p className="text-[10px] text-emerald-800">
-                              El archivo APK está listo en la carpeta Descargas de tu teléfono.
-                            </p>
+                      {downloadStatus === 'completed' && (
+                        <div className="space-y-2">
+                          <div className="p-2.5 rounded-lg bg-emerald-100/90 border border-emerald-300 text-emerald-950 text-xs flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold">Instalador guardado en el almacenamiento</p>
+                              <p className="text-[10px] text-emerald-800">
+                                El archivo APK está listo en la carpeta Descargas de tu teléfono.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleInstallUpdate(releaseInfo.apkDownloadUrl)}
+                              className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer shadow-md"
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Instalar Actualización Descargada</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadApk(releaseInfo.apkDownloadUrl)}
+                              className="px-2.5 py-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 text-xs font-semibold transition-all cursor-pointer"
+                              title="Volver a descargar"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
+                      )}
 
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleInstallUpdate(releaseInfo.apkDownloadUrl)}
-                            className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer shadow-md"
-                          >
-                            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>Instalar Actualización Descargada</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadApk(releaseInfo.apkDownloadUrl)}
-                            className="px-2.5 py-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 text-xs font-semibold transition-all cursor-pointer"
-                            title="Volver a descargar"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    <p className="text-[10px] text-slate-500 pt-0.5">
-                      ℹ️ La descarga se realiza internamente. Al pulsar &quot;Instalar Actualización Descargada&quot; se actualizará la aplicación manteniendo todas tus hojas y datos.
+                      <p className="text-[10px] text-slate-500 pt-0.5">
+                        ℹ️ La descarga se realiza internamente. Al pulsar &quot;Instalar Actualización Descargada&quot; se actualizará la aplicación manteniendo todas tus hojas y datos.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-blue-900/80 pt-0.5 font-medium">
+                      ✓ Tu aplicación cuenta con la versión más reciente. No se requiere descargar ningún archivo.
                     </p>
-                  </div>
+                  )}
                 </div>
               )}
 
