@@ -71,6 +71,7 @@ const INITIAL_SETTINGS: AppSettings = {
     VES: 1.0,
   },
   autoRefresh: true,
+  githubRepo: 'proyectos-lireyes/procalc',
 };
 
 export default function App() {
@@ -85,7 +86,13 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_SETTINGS_KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (!parsed.githubRepo || parsed.githubRepo.includes('lissandro545')) {
+          parsed.githubRepo = 'proyectos-lireyes/procalc';
+        }
+        return parsed;
+      }
     } catch (e) {
       console.error(e);
     }
@@ -690,7 +697,7 @@ export default function App() {
 
         {/* VIEW 2: CALCU DE CUENTAS (Spreadsheet Table) */}
         {activeTab === 'sheets' && (
-          <div className="w-full flex-1 min-h-0 h-full overflow-y-auto">
+          <div className="w-full flex-1 min-h-0 h-full flex flex-col overflow-hidden">
             <SpreadsheetTable
               sheets={sheets}
               activeSheetId={activeSheetId}

@@ -49,6 +49,8 @@ export interface AppSettings {
   useCustomRates: boolean;
   customRates: Record<Currency, number>;
   autoRefresh: boolean;
+  githubRepo?: string; // e.g. "proyectos-lireyes/procalc"
+  customUpdateUrl?: string; // Direct APK download link
 }
 
 export interface HistoryItem {

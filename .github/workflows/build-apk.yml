@@ -1,16 +1,22 @@
-name: Compilar APK Android
+name: Compilar APK Android y Publicar Release
 
 on:
   push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, '**' ]
   workflow_dispatch:
+
+# Variables de entorno globales del workflow
+env:
+  # URL pública permanente de descarga directa del APK (siempre la misma)
+  PUBLIC_APK_DOWNLOAD_URL: "https://github.com/${{ github.repository }}/releases/latest/download/app-release.apk"
+  PUBLIC_LATEST_RELEASE_URL: "https://github.com/${{ github.repository }}/releases/latest"
 
 jobs:
   build-apk:
     name: Build Android APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Clonar código
@@ -30,7 +36,11 @@ jobs:
       - name: Instalar dependencias
         run: npm install
 
-      - name: Compilar frontend web (Vite)
+      - name: Compilar frontend web (Vite) con URL y Repo integrados
+        env:
+          VITE_GITHUB_REPO: ${{ github.repository }}
+          VITE_PUBLIC_APK_URL: https://github.com/${{ github.repository }}/releases/latest/download/app-release.apk
+          VITE_APP_VERSION: 1.0.${{ github.run_number }}
         run: npm run build
 
       - name: Sincronizar Capacitor con Android
@@ -44,9 +54,65 @@ jobs:
           cd android
           ./gradlew assembleRelease -PversionCode=${{ github.run_number }} -PversionName=1.0.${{ github.run_number }} --stacktrace
 
+      - name: Preparar archivos APK para distribución
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk android/app/build/outputs/apk/release/CalculadoraMultimoneda-v1.0.${{ github.run_number }}.apk
+
       - name: Subir APK como Artefacto descargable
         uses: actions/upload-artifact@v4
         with:
-          name: CalculadoraMultimoneda-APK
+          name: CalculadoraMultimoneda-APK-Build-${{ github.run_number }}
           path: android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
+
+      - name: Publicar Release con APK descargable público (Nueva versión en cada compilación)
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: "Calculadora Multimoneda v1.0.${{ github.run_number }}"
+          body: |
+            ## 📱 Calculadora Multimoneda v1.0.${{ github.run_number }}
+
+            ### 📥 Enlaces Públicos de Descarga:
+            - **URL Pública Permanente (Siempre la última versión disponible):**
+              👉 [Descargar app-release.apk (Última versión)](https://github.com/${{ github.repository }}/releases/latest/download/app-release.apk)
+
+            - **Descarga específica de esta versión (Build #${{ github.run_number }}):**
+              👉 [Descargar CalculadoraMultimoneda-v1.0.${{ github.run_number }}.apk](https://github.com/${{ github.repository }}/releases/download/v1.0.${{ github.run_number }}/CalculadoraMultimoneda-v1.0.${{ github.run_number }}.apk)
+
+            - **Página de Versiones en GitHub:**
+              https://github.com/${{ github.repository }}/releases/latest
+
+            - **Panel de Compilaciones (GitHub Actions):**
+              https://github.com/${{ github.repository }}/actions
+
+            ---
+            *Compilación automatizada por GitHub Actions (Build #${{ github.run_number }})*
+          draft: false
+          prerelease: false
+          files: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/apk/release/CalculadoraMultimoneda-v1.0.${{ github.run_number }}.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resumen de Compilación y URL Pública Permanente
+        run: |
+          echo "=========================================================================="
+          echo "🎉 COMPILACIÓN COMPLETADA EXITOSAMENTE"
+          echo "📦 VERSIÓN GENERADA: v1.0.${{ github.run_number }}"
+          echo "📥 URL PÚBLICA PERMANENTE DE DESCARGA DIRECTA (SIEMPRE LA MISMA):"
+          echo "https://github.com/${{ github.repository }}/releases/latest/download/app-release.apk"
+          echo "⚙️ ACCIONES: https://github.com/${{ github.repository }}/actions"
+          echo "=========================================================================="
+          echo "### 🚀 Compilación Exitosa de Android APK" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📥 URL Pública Permanente de Descarga (Siempre la misma):" >> $GITHUB_STEP_SUMMARY
+          echo "[📲 **Descargar app-release.apk (Última Versión)**](https://github.com/${{ github.repository }}/releases/latest/download/app-release.apk)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Repositorio:** \`${{ github.repository }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Versión:** \`v1.0.${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Enlace al Release:** [Ver Release v1.0.${{ github.run_number }}](https://github.com/${{ github.repository }}/releases/tag/v1.0.${{ github.run_number }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Historial de Acciones:** [Ver GitHub Actions](https://github.com/${{ github.repository }}/actions)" >> $GITHUB_STEP_SUMMARY
+

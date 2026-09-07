@@ -13,7 +13,8 @@ import {
   ArrowRightLeft,
   Share2,
   Tag,
-  Keyboard,
+  Eye,
+  CreditCard,
 } from 'lucide-react';
 import {
   Sheet,
@@ -91,9 +92,8 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   const [tempTitle, setTempTitle] = useState(sheet.title);
 
   // In-app confirmation and modal states
-  const [confirmDeleteSheetId, setConfirmDeleteSheetId] = useState<string | null>(null);
+  const [sheetToClose, setSheetToClose] = useState<Sheet | null>(null);
   const [confirmClearRows, setConfirmClearRows] = useState(false);
-  const [confirmCloseActiveSheet, setConfirmCloseActiveSheet] = useState(false);
   const [isTricountModalOpen, setIsTricountModalOpen] = useState(false);
   const [selectingPayerRowId, setSelectingPayerRowId] = useState<string | null>(null);
   const [selectingCurrencyRowId, setSelectingCurrencyRowId] = useState<string | null>(null);
@@ -116,7 +116,6 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
 
   // Virtual keypad for amount input and device keyboard for descriptions
   const amountInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const [showVirtualKeypad, setShowVirtualKeypad] = useState<boolean>(true);
 
   // Helper to insert tokens into active row's amount
   const handleInsertToken = (token: string) => {
@@ -132,7 +131,19 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
     }
 
     const targetRow = sheet.rows.find((r) => r.id === activeRowId) || sheet.rows[sheet.rows.length - 1];
-    if (!targetRow) return;
+    if (!targetRow) {
+      if (token !== 'AC' && token !== 'DEL') {
+        const newId = onAddRow();
+        if (newId && typeof newId === 'string') {
+          setActiveRowId(newId);
+          onUpdateRow(newId, { expression: token === 'ans' ? '0' : token });
+          setTimeout(() => {
+            amountInputRefs.current[newId]?.focus();
+          }, 40);
+        }
+      }
+      return;
+    }
 
     const input = amountInputRefs.current[targetRow.id];
     const currentExpr = targetRow.expression || '';
@@ -191,9 +202,8 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   React.useEffect(() => {
     setTempTitle(sheet.title);
     setEditingSheetTitle(false);
-    setConfirmCloseActiveSheet(false);
+    setSheetToClose(null);
     setConfirmClearRows(false);
-    setConfirmDeleteSheetId(null);
   }, [sheet.id, sheet.title]);
 
   const handleSaveTitle = () => {
@@ -394,37 +404,67 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   }, [settings.displayCurrency, settings.paymentCurrency]);
 
   return (
-    <div className="flex flex-col bg-white border border-slate-200 rounded-lg shadow-sm w-full overflow-hidden">
-      {/* 1. Spreadsheet Header: Sheet Tabs like Google Sheets */}
-      <div className="bg-slate-100 border-b border-slate-200 px-2 sm:px-3 pt-2 flex items-center justify-between gap-2 overflow-x-auto scrollbar-none">
-        <div className="flex items-center gap-1 min-w-0">
+    <div className="flex flex-col bg-white border border-slate-200 rounded-lg shadow-sm w-full h-full overflow-hidden">
+      {/* 1. Spreadsheet Header: Sheet Tabs with inline rename on tap & optional Cerradas */}
+      <div className="bg-slate-100 border-b border-slate-200 px-2 sm:px-3 pt-1.5 pb-1 flex items-center justify-between gap-2 shrink-0">
+        {/* Left: Sheet Tabs (scrolls horizontally if multiple tabs) */}
+        <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-none flex-1 py-0.5">
           {sheets.map((s) => {
             const isCurrent = s.id === activeSheetId;
             return (
               <div
                 key={s.id}
-                onClick={() => onSelectSheet(s.id)}
-                className={`group px-3 py-1.5 rounded-t-md text-xs font-semibold flex items-center gap-1.5 cursor-pointer border-t border-x transition-all select-none ${
+                onClick={() => {
+                  if (isCurrent) {
+                    setTempTitle(s.title);
+                    setEditingSheetTitle(true);
+                  } else {
+                    onSelectSheet(s.id);
+                    setEditingSheetTitle(false);
+                  }
+                }}
+                className={`group px-2.5 py-1 rounded-t-md text-xs font-semibold flex items-center gap-1.5 cursor-pointer border-t border-x transition-all select-none shrink-0 ${
                   isCurrent
                     ? 'bg-white border-slate-200 text-blue-700 shadow-2xs font-bold'
                     : 'bg-slate-200/70 border-transparent text-slate-600 hover:bg-slate-200 hover:text-slate-900'
                 }`}
+                title={isCurrent ? 'Toca para cambiar nombre' : s.title}
               >
                 <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate max-w-[100px] sm:max-w-[140px]">{s.title}</span>
 
-                {/* Close Tab Button */}
-                {sheets.length > 1 && isCurrent && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirmDeleteSheetId(s.id);
-                    }}
-                    className="opacity-60 hover:opacity-100 hover:text-rose-600 p-0.5 rounded transition-opacity cursor-pointer"
-                    title="Cerrar esta hoja"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
+                {isCurrent && editingSheetTitle ? (
+                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="text"
+                      value={tempTitle}
+                      onChange={(e) => setTempTitle(e.target.value)}
+                      onBlur={handleSaveTitle}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveTitle();
+                        if (e.key === 'Escape') {
+                          setTempTitle(s.title);
+                          setEditingSheetTitle(false);
+                        }
+                      }}
+                      autoFocus
+                      className="w-20 sm:w-28 bg-blue-50/80 border border-blue-500 rounded px-1.5 py-0.5 text-xs font-bold text-slate-900 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveTitle}
+                      className="p-0.5 rounded bg-blue-600 text-white hover:bg-blue-500 cursor-pointer"
+                      title="Guardar nombre"
+                    >
+                      <Check className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <span className="truncate max-w-[90px] sm:max-w-[140px]">{s.title}</span>
+                    {isCurrent && (
+                      <Edit2 className="w-2.5 h-2.5 text-blue-400 opacity-60 group-hover:opacity-100 shrink-0" />
+                    )}
+                  </>
                 )}
               </div>
             );
@@ -433,192 +473,30 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
           <button
             id="add-sheet-tab-btn"
             onClick={onCreateSheet}
-            className="p-1.5 rounded hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors ml-1 cursor-pointer"
+            className="p-1 rounded hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors ml-0.5 cursor-pointer shrink-0"
             title="Añadir nueva cuenta u hoja"
           >
             <Plus className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Action buttons on tab right side: Cuentas Cerradas */}
-        <div className="flex items-center gap-1 pb-1.5 shrink-0">
-          {onOpenClosedSheets && (
+        {/* Right: Only Cuentas Cerradas count (clean and separated) */}
+        {onOpenClosedSheets && (
+          <div className="flex items-center shrink-0 pl-1">
             <button
+              type="button"
               onClick={onOpenClosedSheets}
-              className="text-[11px] font-semibold text-slate-600 hover:text-amber-700 px-2 py-0.5 rounded hover:bg-slate-200/70 transition-colors cursor-pointer flex items-center gap-1"
+              className="text-[10px] sm:text-[11px] font-semibold text-slate-600 hover:text-amber-700 px-1.5 py-0.5 rounded hover:bg-slate-200 transition-colors cursor-pointer whitespace-nowrap"
               title="Ver y reabrir cuentas cerradas"
             >
               <span>Cerradas ({closedSheetsCount})</span>
             </button>
-          )}
-        </div>
-      </div>
-
-      {/* Confirmation Dialogs in-app */}
-      {confirmDeleteSheetId && (
-        <div className="bg-rose-50 border-b border-rose-200 px-4 py-2 flex items-center justify-between text-xs text-rose-800">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-            <span>¿Estás seguro de cerrar/eliminar esta hoja?</span>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                onDeleteSheet(confirmDeleteSheetId);
-                setConfirmDeleteSheetId(null);
-              }}
-              className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded cursor-pointer"
-            >
-              Sí, cerrar
-            </button>
-            <button
-              onClick={() => setConfirmDeleteSheetId(null)}
-              className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-medium rounded cursor-pointer"
-            >
-              Cancelar
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 2. Sheet Title & Direct Account Controls Bar (With Tricount right beside Cerrar cuenta) */}
-      <div className="bg-white border-b border-slate-200 px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          {editingSheetTitle ? (
-            <div className="flex items-center gap-1.5">
-              <input
-                type="text"
-                value={tempTitle}
-                onChange={(e) => setTempTitle(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSaveTitle();
-                  if (e.key === 'Escape') {
-                    setTempTitle(sheet.title);
-                    setEditingSheetTitle(false);
-                  }
-                }}
-                autoFocus
-                className="w-full bg-slate-50 border border-blue-500 rounded px-2 py-0.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none"
-              />
-              <button
-                onClick={handleSaveTitle}
-                className="p-1 rounded bg-blue-600 text-white hover:bg-blue-500 cursor-pointer"
-              >
-                <Check className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => {
-                  setTempTitle(sheet.title);
-                  setEditingSheetTitle(false);
-                }}
-                className="p-1 rounded bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5 group">
-              <span className="text-xs sm:text-sm font-bold text-slate-800 truncate">
-                {sheet.title}
-              </span>
-              <button
-                onClick={() => setEditingSheetTitle(true)}
-                className="text-slate-400 hover:text-blue-600 p-0.5 transition-colors cursor-pointer"
-                title="Renombrar hoja"
-              >
-                <Edit2 className="w-3 h-3" />
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Action Controls: Tricount Button + Cerrar Cuenta Button */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* TRICOUNT BUTTON INSIDE ACCOUNT */}
-          <button
-            id="tricount-account-btn"
-            onClick={() => setIsTricountModalOpen(true)}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
-              isTricountActive
-                ? 'bg-emerald-600 text-white shadow-2xs hover:bg-emerald-500'
-                : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
-            }`}
-            title="Abrir opciones de Tricount y liquidación"
-          >
-            <Users className="w-3.5 h-3.5" />
-            <span>{isTricountActive ? `Tricount (${members.length})` : '+ Tricount'}</span>
-          </button>
-
-          {/* TOGGLES PARA MOSTRAR / OCULTAR COLUMNAS MOSTRAR Y PAGAR */}
-          <div className="flex items-center gap-1 border-l border-slate-200 pl-1.5 sm:pl-2">
-            <button
-              type="button"
-              onClick={() => {
-                if (showDisplayColumn && !showPaymentColumn) return;
-                setShowDisplayColumn((prev) => !prev);
-              }}
-              className={`px-2 py-0.5 rounded text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer border ${
-                showDisplayColumn
-                  ? 'bg-blue-50 text-blue-800 border-blue-300 shadow-2xs'
-                  : 'bg-slate-100 text-slate-400 border-slate-200 line-through opacity-70'
-              }`}
-              title="Mostrar u ocultar columna Mostrar"
-            >
-              Col. Mostrar
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (showPaymentColumn && !showDisplayColumn) return;
-                setShowPaymentColumn((prev) => !prev);
-              }}
-              className={`px-2 py-0.5 rounded text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer border ${
-                showPaymentColumn
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 shadow-2xs'
-                  : 'bg-slate-100 text-slate-400 border-slate-200 line-through opacity-70'
-              }`}
-              title="Mostrar u ocultar columna Pagar"
-            >
-              Col. Pagar
-            </button>
-          </div>
-
-          {/* CERRAR CUENTA BUTTON */}
-          {confirmCloseActiveSheet ? (
-            <div className="flex items-center gap-1.5 bg-rose-50 border border-rose-200 rounded px-2 py-0.5 text-[11px]">
-              <span className="text-rose-800 font-medium">¿Cerrar cuenta?</span>
-              <button
-                onClick={() => {
-                  onDeleteSheet(sheet.id);
-                  setConfirmCloseActiveSheet(false);
-                }}
-                className="px-2 py-0.5 bg-rose-600 text-white font-bold rounded hover:bg-rose-700 cursor-pointer"
-              >
-                Sí
-              </button>
-              <button
-                onClick={() => setConfirmCloseActiveSheet(false)}
-                className="px-1.5 py-0.5 text-slate-600 hover:text-slate-900 cursor-pointer"
-              >
-                No
-              </button>
-            </div>
-          ) : (
-            <button
-              id="close-account-btn"
-              onClick={() => setConfirmCloseActiveSheet(true)}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-50 hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-200 hover:border-rose-200 text-xs font-semibold transition-colors cursor-pointer"
-              title="Cerrar esta cuenta"
-            >
-              <X className="w-3 h-3 text-rose-500" />
-              <span className="hidden sm:inline">Cerrar cuenta</span>
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
       {/* 4. EXCEL-STYLE 1-ROW SPREADSHEET TABLE */}
-      <div className="w-full overflow-y-auto max-h-[calc(100vh-320px)] sm:max-h-[calc(100vh-300px)]">
+      <div className="w-full flex-1 min-h-0 overflow-y-auto">
         {computedRows.length === 0 ? (
           <div className="p-8 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2 border-b border-slate-200">
             <span>No hay operaciones en esta cuenta.</span>
@@ -638,10 +516,10 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                 style={{
                   width:
                     showDisplayColumn && showPaymentColumn
-                      ? isTricountActive ? '45%' : '51%'
+                      ? isTricountActive ? '43%' : '51%'
                       : showDisplayColumn || showPaymentColumn
-                      ? isTricountActive ? '62%' : '70%'
-                      : isTricountActive ? '85%' : '95%',
+                      ? isTricountActive ? '60%' : '70%'
+                      : isTricountActive ? '82%' : '95%',
                 }}
               />
               {showDisplayColumn && (
@@ -649,7 +527,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                   style={{
                     width:
                       showPaymentColumn
-                        ? isTricountActive ? '20%' : '22%'
+                        ? isTricountActive ? '19%' : '22%'
                         : isTricountActive ? '23%' : '25%',
                   }}
                 />
@@ -659,14 +537,14 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                   style={{
                     width:
                       showDisplayColumn
-                        ? isTricountActive ? '20%' : '22%'
+                        ? isTricountActive ? '19%' : '22%'
                         : isTricountActive ? '23%' : '25%',
                   }}
                 />
               )}
-              {isTricountActive && <col style={{ width: '10%' }} />}
+              {isTricountActive && <col style={{ width: '14%', minWidth: '52px' }} />}
             </colgroup>
-            <thead>
+            <thead className="sticky top-0 z-10 bg-slate-100 shadow-2xs">
               <tr className="bg-slate-100 text-slate-700 font-bold uppercase text-[10px] sm:text-[11px] select-none">
                 <th className="border border-slate-300 px-0.5 py-1.5 text-center">
                   #
@@ -685,8 +563,9 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                   </th>
                 )}
                 {isTricountActive && (
-                  <th className="border border-slate-300 px-0.5 py-1.5 text-center text-emerald-800 text-[10px] sm:text-[11px] truncate" title="Tricount">
-                    Tricount
+                  <th className="border border-slate-300 px-0.5 py-1.5 text-center text-emerald-800 text-[10px] sm:text-[11px] whitespace-nowrap" title="Tricount">
+                    <span className="hidden sm:inline">Tricount</span>
+                    <span className="sm:hidden">Tric.</span>
                   </th>
                 )}
               </tr>
@@ -837,16 +716,19 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                     {isTricountActive && (
                       <td className="border border-slate-300 p-0.5 text-center bg-emerald-50/30 align-middle">
                         {(() => {
-                          const fullPayer = row.payer || members[0] || 'Asignar';
-                          const displayPayer = fullPayer.length > 5 ? `${fullPayer.slice(0, 4)}…` : fullPayer;
+                          const fullPayer = (row.payer || members[0] || 'Asignar').trim();
+                          // Garantizar mostrar como mínimo las 3 primeras letras del nombre sin colapsar a 1 letra
+                          const shortMobile = fullPayer.length <= 4 ? fullPayer : `${fullPayer.slice(0, 3)}.`;
+                          const shortDesktop = fullPayer.length > 7 ? `${fullPayer.slice(0, 6)}…` : fullPayer;
                           return (
                             <button
                               type="button"
                               onClick={() => setSelectingPayerRowId(row.id)}
-                              className="w-full max-w-[55px] sm:max-w-[70px] mx-auto px-0.5 py-0.5 rounded bg-white hover:bg-emerald-100 border border-emerald-300 text-emerald-900 font-bold text-[10px] sm:text-[11px] truncate block text-center cursor-pointer transition-colors shadow-2xs leading-tight"
+                              className="w-full max-w-[56px] sm:max-w-[76px] mx-auto px-1 py-0.5 rounded bg-white hover:bg-emerald-100 border border-emerald-300 text-emerald-900 font-bold text-[10px] sm:text-[11px] block text-center cursor-pointer transition-colors shadow-2xs leading-tight whitespace-nowrap"
                               title={`Pagado por: ${fullPayer}. Clic para cambiar.`}
                             >
-                              {displayPayer}
+                              <span className="sm:hidden">{shortMobile}</span>
+                              <span className="hidden sm:inline">{shortDesktop}</span>
                             </button>
                           );
                         })()}
@@ -860,280 +742,323 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
         )}
       </div>
 
-      {/* 5. Spreadsheet Footer Toolbar */}
-      <div className="p-2 sm:p-2.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 text-xs shrink-0">
-        <div className="flex items-center gap-2">
+      {/* 5. Spreadsheet Footer Toolbar: Tricount, Columnas, Exportar, Vaciar, Cerrar cuenta */}
+      <div className="px-2 sm:px-3 py-1.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-1.5 text-xs shrink-0">
+        {/* Left: Tricount + Column Toggles (Mostrar / Pagar) */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {/* TRICOUNT BUTTON */}
           <button
-            onClick={() => onAddRow()}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all shadow-2xs cursor-pointer active:scale-95"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>+ Agregar Fila</span>
-          </button>
-          <button
+            id="tricount-account-btn"
             type="button"
-            onClick={() => setShowVirtualKeypad(!showVirtualKeypad)}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md font-bold text-xs transition-all cursor-pointer border ${
-              showVirtualKeypad
-                ? 'bg-indigo-50 border-indigo-300 text-indigo-800 shadow-2xs'
-                : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+            onClick={() => setIsTricountModalOpen(true)}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold transition-all cursor-pointer shadow-2xs ${
+              isTricountActive
+                ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                : 'bg-white text-emerald-800 border border-emerald-300 hover:bg-emerald-50'
             }`}
-            title="Teclado numérico táctil para ingresar montos"
+            title="Abrir opciones de Tricount y liquidación"
           >
-            <Keyboard className="w-3.5 h-3.5 text-indigo-600" />
-            <span>{showVirtualKeypad ? 'Ocultar Teclado' : 'Teclado Montos'}</span>
+            <Users className="w-3.5 h-3.5" />
+            <span>{isTricountActive ? `Tricount (${members.length})` : 'Tricount'}</span>
           </button>
-        </div>
 
-        {computedRows.length > 0 && (
-          <div>
-            {confirmClearRows ? (
-              <div className="flex items-center gap-1.5 bg-rose-50 border border-rose-200 rounded px-2 py-1 text-xs">
-                <span className="text-rose-800 font-medium">¿Vaciar todas las filas?</span>
-                <button
-                  onClick={() => {
-                    onClearRows();
-                    setConfirmClearRows(false);
-                  }}
-                  className="px-2 py-0.5 bg-rose-600 text-white font-bold rounded hover:bg-rose-700 cursor-pointer"
-                >
-                  Sí, vaciar
-                </button>
-                <button
-                  onClick={() => setConfirmClearRows(false)}
-                  className="px-1.5 py-0.5 text-slate-600 hover:text-slate-900 cursor-pointer"
-                >
-                  Cancelar
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setConfirmClearRows(true)}
-                className="text-slate-400 hover:text-rose-600 text-[11px] font-medium transition-colors cursor-pointer"
-              >
-                Vaciar cuenta
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Teclado Virtual de la Calculadora Básica para Montos */}
-      {showVirtualKeypad && (
-        <div className="p-2 sm:p-2.5 bg-slate-100 border-t border-slate-200 shrink-0 shadow-inner">
-          <div className="grid grid-cols-5 gap-1.5 sm:gap-2 max-w-2xl mx-auto">
-            {/* Row 1: (, ), %, DEL, AC */}
+          {/* TOGGLES PARA MOSTRAR / OCULTAR COLUMNAS MOSTRAR Y PAGAR (Solo iconos) */}
+          <div className="flex items-center gap-1 border-l border-slate-300 pl-1.5">
             <button
               type="button"
-              onClick={() => handleInsertToken('(')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+              onClick={() => {
+                if (showDisplayColumn && !showPaymentColumn) return;
+                setShowDisplayColumn((prev) => !prev);
+              }}
+              className={`p-1 rounded transition-all cursor-pointer border shadow-2xs ${
+                showDisplayColumn
+                  ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
+                  : 'bg-white text-slate-400 border-slate-300 opacity-60 hover:opacity-100'
+              }`}
+              title={`Columna Mostrar (${settings.displayCurrency})`}
+              aria-label="Columna Mostrar"
             >
-              (
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken(')')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-            >
-              )
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken('%')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 shadow-2xs active:scale-95 flex items-center justify-center"
-            >
-              %
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken('DEL')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-100 hover:bg-rose-200 text-rose-800 active:scale-95 flex items-center justify-center"
-            >
-              DEL
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken('AC')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-200 hover:bg-rose-300 text-rose-900 active:scale-95 flex items-center justify-center"
-            >
-              AC
-            </button>
-
-            {/* Row 2: 7, 8, 9, /, * */}
-            {['7', '8', '9', '/', '*'].map((btn) => (
-              <button
-                key={btn}
-                type="button"
-                onClick={() => handleInsertToken(btn)}
-                className={`h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
-                  btn === '/' || btn === '*'
-                    ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
-                    : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
-                }`}
-              >
-                {btn === '/' ? '÷' : btn === '*' ? '×' : btn}
-              </button>
-            ))}
-
-            {/* Row 3: 4, 5, 6, -, + */}
-            {['4', '5', '6', '-', '+'].map((btn) => (
-              <button
-                key={btn}
-                type="button"
-                onClick={() => handleInsertToken(btn)}
-                className={`h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
-                  btn === '-' || btn === '+'
-                    ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
-                    : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
-                }`}
-              >
-                {btn}
-              </button>
-            ))}
-
-            {/* Row 4: 1, 2, 3, ans, Limpiar Fila */}
-            <button
-              type="button"
-              onClick={() => handleInsertToken('1')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-            >
-              1
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken('2')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-            >
-              2
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken('3')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-            >
-              3
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken('ans')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-100 hover:bg-indigo-200 text-indigo-900 active:scale-95 flex items-center justify-center"
-            >
-              Ans
+              <Eye className="w-3.5 h-3.5" />
             </button>
             <button
               type="button"
               onClick={() => {
-                if (activeRowId) onUpdateRow(activeRowId, { expression: '' });
+                if (showPaymentColumn && !showDisplayColumn) return;
+                setShowPaymentColumn((prev) => !prev);
               }}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-xs font-bold transition-all cursor-pointer font-sans bg-rose-100 hover:bg-rose-200 text-rose-800 shadow-2xs flex items-center justify-center gap-1 active:scale-95"
-              title="Borrar monto de la fila activa"
+              className={`p-1 rounded transition-all cursor-pointer border shadow-2xs ${
+                showPaymentColumn
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                  : 'bg-white text-slate-400 border-slate-300 opacity-60 hover:opacity-100'
+              }`}
+              title={`Columna Pagar (${settings.paymentCurrency})`}
+              aria-label="Columna Pagar"
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Limpiar</span>
-            </button>
-
-            {/* Row 5: 0, 00, ., +, ↵ Enter */}
-            <button
-              type="button"
-              onClick={() => handleInsertToken('0')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-            >
-              0
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken('00')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-            >
-              00
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken('.')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-            >
-              .
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken('+')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-lg sm:text-xl font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 active:scale-95 flex items-center justify-center"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              onClick={() => handleInsertToken('↵ Enter')}
-              className="h-11 sm:h-13 min-h-[44px] sm:min-h-[52px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-700 hover:bg-indigo-600 text-white shadow-xs flex items-center justify-center gap-1 active:scale-95"
-              title="Nueva Fila (Enter)"
-            >
-              ↵ Enter
+              <CreditCard className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
-      )}
 
-      {/* 6. Grand Totals Fixed Summary Grid (Anclado/Fijo en la parte inferior) */}
-      <footer className="sticky bottom-0 z-10 bg-slate-50/95 backdrop-blur-xs text-slate-800 p-2.5 sm:p-3 flex flex-col gap-2 border-t border-slate-200 shadow-md">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2.5">
+        {/* Right: Exportar Reporte + Vaciar cuenta + Cerrar cuenta */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {onOpenExportReport && (
+            <button
+              type="button"
+              onClick={onOpenExportReport}
+              className="p-1 bg-white hover:bg-slate-100 text-slate-700 rounded border border-slate-300 transition-colors cursor-pointer shadow-2xs active:scale-95"
+              title="Exportar reporte"
+              aria-label="Exportar reporte"
+            >
+              <FileText className="w-3.5 h-3.5 text-slate-600" />
+            </button>
+          )}
+
+          {computedRows.length > 0 && (
+            <div>
+              {confirmClearRows ? (
+                <div className="flex items-center gap-1 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5 text-xs">
+                  <span className="text-rose-800 font-medium text-[11px]">¿Vaciar?</span>
+                  <button
+                    onClick={() => {
+                      onClearRows();
+                      setConfirmClearRows(false);
+                    }}
+                    className="px-2 py-0.5 bg-rose-600 text-white font-bold rounded text-[11px] hover:bg-rose-700 cursor-pointer"
+                  >
+                    Sí
+                  </button>
+                  <button
+                    onClick={() => setConfirmClearRows(false)}
+                    className="px-1.5 py-0.5 text-slate-600 text-[11px] hover:text-slate-900 cursor-pointer"
+                  >
+                    No
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearRows(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded border border-slate-300 hover:border-rose-300 text-xs font-semibold transition-colors cursor-pointer shadow-2xs active:scale-95"
+                  title="Vaciar todas las filas de la cuenta"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                  <span>Vaciar</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* CERRAR CUENTA BUTTON (Abre modal centrado) */}
+          <button
+            id="close-account-btn"
+            type="button"
+            onClick={() => setSheetToClose(sheet)}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-300 hover:border-rose-300 text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
+            title="Cerrar esta cuenta"
+          >
+            <X className="w-3.5 h-3.5 text-rose-500" />
+            <span>Cerrar</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 6. Grand Totals Summary Strip (Compacto y elegante encima del teclado) */}
+      <div className="bg-slate-50/95 backdrop-blur-xs text-slate-800 px-2 py-1 sm:px-3 sm:py-1 border-t border-slate-200 shrink-0">
+        <div className="grid grid-cols-4 gap-1 sm:gap-1.5 max-w-2xl mx-auto">
           {/* Total Bs */}
-          <div className="bg-white p-2 rounded-lg border border-emerald-200 shadow-2xs flex flex-col">
-            <span className="text-[10px] uppercase tracking-wider text-emerald-700 font-bold">
-              Total en Bs
+          <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-emerald-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
+            <span className="text-[9px] uppercase tracking-wide text-emerald-700 font-bold truncate">
+              Total Bs
             </span>
-            <span className="text-sm sm:text-base font-mono font-bold text-emerald-800 truncate">
-              {formatNumber(totals.netByCurrency.VES, settings.decimals)} <span className="text-xs">Bs</span>
+            <span className="text-[11px] sm:text-xs font-mono font-bold text-emerald-800 truncate">
+              {formatNumber(totals.netByCurrency.VES, settings.decimals)} <span className="text-[9px]">Bs</span>
             </span>
           </div>
 
           {/* Total $ */}
-          <div className="bg-white p-2 rounded-lg border border-blue-200 shadow-2xs flex flex-col">
-            <span className="text-[10px] uppercase tracking-wider text-blue-700 font-bold">
-              Total en $
+          <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-blue-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
+            <span className="text-[9px] uppercase tracking-wide text-blue-700 font-bold truncate">
+              Total $
             </span>
-            <span className="text-sm sm:text-base font-mono text-blue-800 font-bold truncate">
+            <span className="text-[11px] sm:text-xs font-mono font-bold text-blue-800 truncate">
               $ {formatNumber(totals.netByCurrency.USD, settings.decimals)}
             </span>
           </div>
 
           {/* Total USDT */}
-          <div className="bg-white p-2 rounded-lg border border-amber-200 shadow-2xs flex flex-col">
-            <span className="text-[10px] uppercase tracking-wider text-amber-700 font-bold">
-              Total en USDT
+          <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-amber-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
+            <span className="text-[9px] uppercase tracking-wide text-amber-700 font-bold truncate">
+              Total USDT
             </span>
-            <span className="text-sm sm:text-base font-mono text-amber-800 font-bold truncate">
-              {formatNumber(totals.netByCurrency.USDT, settings.decimals)} <span className="text-xs">USDT</span>
+            <span className="text-[11px] sm:text-xs font-mono font-bold text-amber-800 truncate">
+              {formatNumber(totals.netByCurrency.USDT, settings.decimals)} <span className="text-[9px]">USDT</span>
             </span>
           </div>
 
           {/* Total EUR */}
-          <div className="bg-white p-2 rounded-lg border border-teal-200 shadow-2xs flex flex-col">
-            <span className="text-[10px] uppercase tracking-wider text-teal-700 font-bold">
-              Total en EUR
+          <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-teal-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
+            <span className="text-[9px] uppercase tracking-wide text-teal-700 font-bold truncate">
+              Total EUR
             </span>
-            <span className="text-sm sm:text-base font-mono text-teal-800 font-bold truncate">
-              {formatNumber(totals.netByCurrency.EUR, settings.decimals)} <span className="text-xs">EUR</span>
+            <span className="text-[11px] sm:text-xs font-mono font-bold text-teal-800 truncate">
+              {formatNumber(totals.netByCurrency.EUR, settings.decimals)} <span className="text-[9px]">EUR</span>
             </span>
           </div>
         </div>
+      </div>
 
-        {/* Footer Bottom Bar: Count & Export */}
-        <div className="flex items-center justify-between pt-1 border-t border-slate-200 text-xs">
-          <span className="text-slate-500 text-[11px]">
-            {computedRows.length} {computedRows.length === 1 ? 'fila' : 'filas'} en esta cuenta
-          </span>
+      {/* 7. Teclado Numérico Fijo en la parte baja */}
+      <div className="p-1.5 sm:p-2 bg-slate-100 border-t border-slate-200 shrink-0 shadow-inner">
+        <div className="grid grid-cols-5 gap-1 sm:gap-1.5 max-w-2xl mx-auto">
+          {/* Row 1: (, ), %, DEL, AC */}
+          <button
+            type="button"
+            onClick={() => handleInsertToken('(')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+          >
+            (
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken(')')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+          >
+            )
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken('%')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 shadow-2xs active:scale-95 flex items-center justify-center"
+          >
+            %
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken('DEL')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-100 hover:bg-rose-200 text-rose-800 active:scale-95 flex items-center justify-center"
+          >
+            DEL
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken('AC')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-200 hover:bg-rose-300 text-rose-900 active:scale-95 flex items-center justify-center"
+          >
+            AC
+          </button>
 
-          {onOpenExportReport && (
+          {/* Row 2: 7, 8, 9, /, * */}
+          {['7', '8', '9', '/', '*'].map((btn) => (
             <button
-              onClick={onOpenExportReport}
-              className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 rounded-md border border-slate-300 text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer shadow-2xs"
+              key={btn}
+              type="button"
+              onClick={() => handleInsertToken(btn)}
+              className={`h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
+                btn === '/' || btn === '*'
+                  ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
+                  : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
+              }`}
             >
-              <FileText className="w-3.5 h-3.5 text-slate-600" />
-              <span>Exportar Reporte</span>
+              {btn === '/' ? '÷' : btn === '*' ? '×' : btn}
             </button>
-          )}
+          ))}
+
+          {/* Row 3: 4, 5, 6, -, + */}
+          {['4', '5', '6', '-', '+'].map((btn) => (
+            <button
+              key={btn}
+              type="button"
+              onClick={() => handleInsertToken(btn)}
+              className={`h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
+                btn === '-' || btn === '+'
+                  ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
+                  : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
+              }`}
+            >
+              {btn}
+            </button>
+          ))}
+
+          {/* Row 4: 1, 2, 3, ans, Limpiar Fila */}
+          <button
+            type="button"
+            onClick={() => handleInsertToken('1')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+          >
+            1
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken('2')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+          >
+            2
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken('3')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+          >
+            3
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken('ans')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-100 hover:bg-indigo-200 text-indigo-900 active:scale-95 flex items-center justify-center"
+          >
+            Ans
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (activeRowId) onUpdateRow(activeRowId, { expression: '' });
+            }}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-xs font-bold transition-all cursor-pointer font-sans bg-rose-100 hover:bg-rose-200 text-rose-800 shadow-2xs flex items-center justify-center gap-1 active:scale-95"
+            title="Borrar monto de la fila activa"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Limpiar</span>
+          </button>
+
+          {/* Row 5: 0, 00, ., +, ↵ Enter */}
+          <button
+            type="button"
+            onClick={() => handleInsertToken('0')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+          >
+            0
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken('00')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+          >
+            00
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken('.')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
+          >
+            .
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken('+')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-lg sm:text-xl font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 active:scale-95 flex items-center justify-center"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={() => handleInsertToken('↵ Enter')}
+            className="h-9 sm:h-11 min-h-[38px] sm:min-h-[44px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-700 hover:bg-indigo-600 text-white shadow-xs flex items-center justify-center gap-1 active:scale-95"
+            title="Nueva Fila (Enter)"
+          >
+            ↵ Enter
+          </button>
         </div>
-      </footer>
+      </div>
 
       {/* 7. MODAL DE OPCIONES Y LIQUIDACIÓN TRICOUNT (No ocupa espacio permanente en la pantalla) */}
       {isTricountModalOpen && (
@@ -1524,6 +1449,47 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                 className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer transition-colors shadow-2xs"
               >
                 Sí, eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CONFIRMAR CERRAR CUENTA */}
+      {sheetToClose && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-2xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-4 sm:p-5 flex flex-col gap-3.5 animate-fade-in border border-slate-200 text-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center shrink-0 text-rose-600">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="flex flex-col min-w-0">
+                <h3 className="font-bold text-sm sm:text-base text-slate-900 truncate">
+                  ¿Cerrar "{sheetToClose.title}"?
+                </h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Esta cuenta se guardará en <span className="font-semibold text-slate-700">"Cuentas Cerradas"</span>. Podrás revisarla o reabrirla cuando lo desees.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setSheetToClose(null)}
+                className="px-3.5 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteSheet(sheetToClose.id);
+                  setSheetToClose(null);
+                }}
+                className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer transition-colors shadow-2xs"
+              >
+                Sí, cerrar cuenta
               </button>
             </div>
           </div>
