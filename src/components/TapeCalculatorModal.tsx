@@ -12,10 +12,13 @@ import {
   Keyboard,
   Smartphone,
   Edit2,
+  Download,
 } from 'lucide-react';
 import { evaluateExpression } from '../utils/mathEvaluator';
 import { formatNumber } from '../utils/currency';
 import { useVirtualKeyboard } from '../utils/useVirtualKeyboard';
+import { encodeCalcAccountShare, CalcSharePayload } from '../utils/shareImporter';
+import { ImportSharedModal } from './ImportSharedModal';
 
 interface TapeCalculatorModalProps {
   isOpen: boolean;
@@ -113,6 +116,7 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [editingAccountName, setEditingAccountName] = useState<string>('');
   const [accountToDelete, setAccountToDelete] = useState<CalculatorAccount | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   const activeAccount = useMemo(() => {
     return (
@@ -357,6 +361,53 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
     setAccountToDelete(null);
   };
 
+  // Import shared account handler
+  const handleImportCalcAccount = (data: CalcSharePayload, mode: 'new' | 'replace') => {
+    const importedRows: TapeRow[] = data.rows.map((r, i) => ({
+      id: 'row_' + Date.now() + '_' + i,
+      description: r.description || '',
+      expression: r.expression || '',
+    }));
+
+    const rowsToSet =
+      importedRows.length > 0
+        ? importedRows
+        : [{ id: 'row_' + Date.now(), description: '', expression: '' }];
+
+    if (mode === 'replace') {
+      setAccounts((prev) =>
+        prev.map((acc) =>
+          acc.id === activeAccount.id
+            ? {
+                ...acc,
+                name: data.name || acc.name,
+                rows: rowsToSet,
+              }
+            : acc
+        )
+      );
+      const targetId = rowsToSet[rowsToSet.length - 1].id;
+      setActiveRowId(targetId);
+      setTimeout(() => {
+        exprInputRefs.current[targetId]?.focus();
+      }, 50);
+    } else {
+      const newAcc: CalculatorAccount = {
+        id: 'acc_' + Date.now(),
+        name: data.name || `Cuenta ${accounts.length + 1}`,
+        rows: rowsToSet,
+        createdAt: Date.now(),
+      };
+      setAccounts((prev) => [...prev, newAcc]);
+      setActiveAccountId(newAcc.id);
+      const targetId = rowsToSet[rowsToSet.length - 1].id;
+      setActiveRowId(targetId);
+      setTimeout(() => {
+        exprInputRefs.current[targetId]?.focus();
+      }, 50);
+    }
+  };
+
   // Smart Enter navigation:
   // If next row exists (even if empty/free), moves focus to the row below without creating an unnecessary row at the end!
   // Only appends a new row when pressing Enter on the last row.
@@ -464,7 +515,12 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
       text += `${idx + 1}. ${expr}${desc}${sub}\n`;
     });
     text += `───────────────────────────\n`;
-    text += `💰 *TOTAL ACUMULADO:* ${formatNumber(grandTotal, 2)}\n`;
+    text += `💰 *TOTAL ACUMULADO:* ${formatNumber(grandTotal, 2)}\n\n`;
+
+    const code = encodeCalcAccountShare(activeAccount.name, activeAccount.rows);
+    text += `📲 *PARA ABRIR E IMPORTAR EN LA APP:*\n`;
+    text += `Copia todo este mensaje y en la app pulsa en «📥 Importar»:\n`;
+    text += `${code}\n`;
 
     navigator.clipboard.writeText(text);
     setCopiedTape(true);
@@ -986,17 +1042,29 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
             </table>
           </div>
 
-          {/* Basic Calculator Summary Bar (Compartir cuenta y Total) */}
-          <div className="bg-white px-3 py-2 border-t border-b border-slate-200 flex items-center justify-between gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={handleShareFullAccount}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
-              title="Copiar desglose completo"
-            >
-              <Share2 className="w-3.5 h-3.5" />
-              <span>{copiedTape ? '¡Copiado!' : 'Compartir cuenta'}</span>
-            </button>
+          {/* Basic Calculator Summary Bar (Compartir cuenta, Importar y Total) */}
+          <div className="bg-white px-3 py-2 border-t border-b border-slate-200 flex items-center justify-between gap-2 shrink-0 flex-wrap">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleShareFullAccount}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs active:scale-95"
+                title="Copiar desglose completo con código de importación"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>{copiedTape ? '¡Copiado!' : 'Compartir cuenta'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(true)}
+                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer border border-indigo-200 shadow-2xs active:scale-95"
+                title="Importar cuenta compartida desde mensaje o portapapeles"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Importar</span>
+              </button>
+            </div>
 
             <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-1 flex items-center gap-2 shadow-2xs">
               <span className="text-xs font-bold text-indigo-900">Total:</span>
@@ -1666,6 +1734,14 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
           </div>
         </div>
       )}
+
+      {/* MODAL DE IMPORTAR INFORMACIÓN COMPARTIDA */}
+      <ImportSharedModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        context="calculator"
+        onImportCalcAccount={handleImportCalcAccount}
+      />
     </div>
   );
 };

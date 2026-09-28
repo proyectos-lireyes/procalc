@@ -35,6 +35,7 @@ import { QuickConverterModal } from './components/QuickConverterModal';
 import { TapeCalculatorModal } from './components/TapeCalculatorModal';
 import { ClosedSheetsModal } from './components/ClosedSheetsModal';
 import { checkGitHubRelease, AppReleaseInfo, DEFAULT_GITHUB_REPO } from './services/updateService';
+import { SheetSharePayload } from './utils/shareImporter';
 
 const STORAGE_SHEETS_KEY = 'multicurrency_sheets_v3';
 const STORAGE_CLOSED_SHEETS_KEY = 'multicurrency_closed_sheets_v3';
@@ -532,6 +533,59 @@ export default function App() {
     setActiveSheetId(target.id);
   };
 
+  // Import shared sheet
+  const handleImportSheet = (data: SheetSharePayload, mode: 'new' | 'replace') => {
+    const importedRows: SheetRow[] = data.rows.map((r, i) => ({
+      id: 'row_' + Date.now() + '_' + i,
+      concept: r.concept || '',
+      expression: r.expression || '0',
+      currency: r.currency || settings.displayCurrency,
+      payer: r.payer,
+    }));
+
+    const rowsToSet =
+      importedRows.length > 0
+        ? importedRows
+        : [
+            {
+              id: 'row_' + Date.now(),
+              concept: '',
+              expression: '0',
+              currency: settings.displayCurrency,
+            },
+          ];
+
+    if (mode === 'replace') {
+      setSheets((prev) =>
+        prev.map((s) =>
+          s.id === activeSheetId
+            ? {
+                ...s,
+                title: data.title || s.title,
+                members: data.members || s.members,
+                isTricountActive: data.isTricountActive ?? s.isTricountActive,
+                rows: rowsToSet,
+                updatedAt: Date.now(),
+              }
+            : s
+        )
+      );
+    } else {
+      const newSheet: Sheet = {
+        id: 'sheet_' + Date.now(),
+        title: data.title || `Cuenta ${sheets.length + 1}`,
+        members: data.members || ['Yo'],
+        isTricountActive: data.isTricountActive ?? false,
+        variables: [...currentSheet.variables],
+        rows: rowsToSet,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      setSheets((prev) => [...prev, newSheet]);
+      setActiveSheetId(newSheet.id);
+    }
+  };
+
   const handlePermanentDeleteClosedSheet = (id: string) => {
     setClosedSheets((prev) => prev.filter((s) => s.id !== id));
   };
@@ -759,6 +813,7 @@ export default function App() {
               onToggleSheetTricount={handleToggleSheetTricount}
               onOpenClosedSheets={() => setIsClosedSheetsOpen(true)}
               closedSheetsCount={closedSheets.length}
+              onImportSheet={handleImportSheet}
             />
           </div>
         )}

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Download, FileText, Share2, Copy, Check, Printer, FileSpreadsheet } from 'lucide-react';
 import { Sheet, ComputedRow, ComputedSheetTotals, RatesState, AppSettings, Currency } from '../types';
 import { CURRENCY_CONFIG, formatCurrency, formatNumber } from '../utils/currency';
+import { encodeSheetShare } from '../utils/shareImporter';
 
 interface ExportReportModalProps {
   isOpen: boolean;
@@ -160,6 +161,10 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
     }
 
     text += `───────────────────────────\n`;
+    const code = encodeSheetShare(sheet);
+    text += `📲 *PARA ABRIR E IMPORTAR ESTA CUENTA EN LA APP:*\n`;
+    text += `Copia todo este mensaje y en la app pulsa en «📥 Importar»:\n`;
+    text += `${code}\n\n`;
     text += `_Generado con Calculadora de Pagos Multimoneda_`;
 
     return text;

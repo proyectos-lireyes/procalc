@@ -15,6 +15,7 @@ import {
   Tag,
   Eye,
   CreditCard,
+  Download,
 } from 'lucide-react';
 import {
   Sheet,
@@ -25,6 +26,8 @@ import {
   RatesState,
   AppSettings,
 } from '../types';
+import { SheetSharePayload } from '../utils/shareImporter';
+import { ImportSharedModal } from './ImportSharedModal';
 import {
   ALL_CURRENCIES,
   CURRENCY_CONFIG,
@@ -63,6 +66,7 @@ interface SpreadsheetTableProps {
   onToggleSheetTricount?: (isActive: boolean) => void;
   onOpenClosedSheets?: () => void;
   closedSheetsCount?: number;
+  onImportSheet?: (data: SheetSharePayload, mode: 'new' | 'replace') => void;
 }
 
 export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
@@ -88,9 +92,11 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   onToggleSheetTricount,
   onOpenClosedSheets,
   closedSheetsCount = 0,
+  onImportSheet,
 }) => {
   const [editingSheetTitle, setEditingSheetTitle] = useState(false);
   const [tempTitle, setTempTitle] = useState(sheet.title);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   // In-app confirmation and modal states
   const [sheetToClose, setSheetToClose] = useState<Sheet | null>(null);
@@ -801,8 +807,20 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
           </div>
         </div>
 
-        {/* Right: Exportar Reporte + Vaciar cuenta + Cerrar cuenta */}
+        {/* Right: Exportar Reporte + Importar + Vaciar cuenta + Cerrar cuenta */}
         <div className="flex items-center gap-1.5 flex-wrap">
+          {onImportSheet && (
+            <button
+              type="button"
+              onClick={() => setIsImportModalOpen(true)}
+              className="px-2 py-1 bg-white hover:bg-slate-100 text-indigo-700 rounded border border-indigo-200 transition-colors cursor-pointer shadow-2xs active:scale-95 flex items-center gap-1 text-xs font-bold"
+              title="Importar cuenta u hoja compartida"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Importar</span>
+            </button>
+          )}
+
           {onOpenExportReport && (
             <button
               type="button"
@@ -1498,6 +1516,16 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* MODAL DE IMPORTAR HOJA O CUENTA COMPARTIDA */}
+      {onImportSheet && (
+        <ImportSharedModal
+          isOpen={isImportModalOpen}
+          onClose={() => setIsImportModalOpen(false)}
+          context="sheets"
+          onImportSheet={onImportSheet}
+        />
       )}
     </div>
   );
