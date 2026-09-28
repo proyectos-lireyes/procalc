@@ -9,6 +9,127 @@ export interface EvalResult {
   error?: string;
 }
 
+/**
+ * Preprocesses calculus operations: definite integrals ∫(f, a, b), derivatives diff(f, x0), summations Σ(f, a, b)
+ */
+function preprocessCalculus(rawExpr: string, vars: Record<string, number>): string {
+  let result = rawExpr;
+
+  // Replace Ran# or ran# with ran()
+  result = result.replace(/Ran#|ran#/gi, 'ran()');
+
+  // Replace infix nPr e.g. 5 nPr 2 or 5P2 -> npr(5, 2)
+  result = result.replace(/(\d+(?:\.\d+)?)\s*(?:nPr|P)\s*(\d+(?:\.\d+)?)/g, 'npr($1,$2)');
+
+  // Replace infix nCr e.g. 5 nCr 2 or 5C2 -> ncr(5, 2)
+  result = result.replace(/(\d+(?:\.\d+)?)\s*(?:nCr|C)\s*(\d+(?:\.\d+)?)/g, 'ncr($1,$2)');
+
+  const patterns = ['integral', 'integrate', '∫', 'diff', 'derivative', 'd/dx', 'sumseq', 'sumatoria', 'Σ'];
+
+  for (const prefix of patterns) {
+    let searchIdx = 0;
+    while (searchIdx < result.length) {
+      const idx = result.indexOf(prefix + '(', searchIdx);
+      if (idx === -1) break;
+
+      const startParen = idx + prefix.length;
+      let depth = 1;
+      let endParen = -1;
+      const commaIndices: number[] = [];
+
+      for (let i = startParen + 1; i < result.length; i++) {
+        if (result[i] === '(') depth++;
+        else if (result[i] === ')') {
+          depth--;
+          if (depth === 0) {
+            endParen = i;
+            break;
+          }
+        } else if (result[i] === ',' && depth === 1) {
+          commaIndices.push(i);
+        }
+      }
+
+      if (endParen === -1) {
+        searchIdx = idx + 1;
+        continue;
+      }
+
+      const inside = result.substring(startParen + 1, endParen);
+
+      if (prefix === 'integral' || prefix === 'integrate' || prefix === '∫') {
+        if (commaIndices.length >= 2) {
+          const firstComma = commaIndices[0] - (startParen + 1);
+          const secondComma = commaIndices[1] - (startParen + 1);
+          const fExpr = inside.substring(0, firstComma).trim();
+          const aExpr = inside.substring(firstComma + 1, secondComma).trim();
+          const bExpr = inside.substring(secondComma + 1).trim();
+
+          const aVal = evaluateExpression(aExpr, vars).value;
+          const bVal = evaluateExpression(bExpr, vars).value;
+
+          // Simpson's 1/3 numerical quadrature
+          const n = 64;
+          const h = (bVal - aVal) / n;
+          let sumVal =
+            evaluateExpression(fExpr, { ...vars, x: aVal, X: aVal }).value +
+            evaluateExpression(fExpr, { ...vars, x: bVal, X: bVal }).value;
+
+          for (let step = 1; step < n; step++) {
+            const xi = aVal + step * h;
+            const factor = step % 2 === 0 ? 2 : 4;
+            const evalStep = evaluateExpression(fExpr, { ...vars, x: xi, X: xi });
+            if (!evalStep.isValid) throw new Error(evalStep.error || 'Error en integral');
+            sumVal += factor * evalStep.value;
+          }
+
+          const numResult = (h / 3) * sumVal;
+          result = result.substring(0, idx) + `(${numResult})` + result.substring(endParen + 1);
+          searchIdx = idx;
+          continue;
+        }
+      } else if (prefix === 'diff' || prefix === 'derivative' || prefix === 'd/dx') {
+        if (commaIndices.length >= 1) {
+          const firstComma = commaIndices[0] - (startParen + 1);
+          const fExpr = inside.substring(0, firstComma).trim();
+          const x0Expr = inside.substring(firstComma + 1).trim();
+          const x0 = evaluateExpression(x0Expr, vars).value;
+          const h = 1e-5;
+          const f1 = evaluateExpression(fExpr, { ...vars, x: x0 + h, X: x0 + h }).value;
+          const f0 = evaluateExpression(fExpr, { ...vars, x: x0 - h, X: x0 - h }).value;
+          const numResult = (f1 - f0) / (2 * h);
+          result = result.substring(0, idx) + `(${numResult})` + result.substring(endParen + 1);
+          searchIdx = idx;
+          continue;
+        }
+      } else if (prefix === 'sumseq' || prefix === 'Σ') {
+        if (commaIndices.length >= 2) {
+          const firstComma = commaIndices[0] - (startParen + 1);
+          const secondComma = commaIndices[1] - (startParen + 1);
+          const fExpr = inside.substring(0, firstComma).trim();
+          const aExpr = inside.substring(firstComma + 1, secondComma).trim();
+          const bExpr = inside.substring(secondComma + 1).trim();
+
+          const startVal = Math.round(evaluateExpression(aExpr, vars).value);
+          const endVal = Math.round(evaluateExpression(bExpr, vars).value);
+
+          let totalSum = 0;
+          for (let k = startVal; k <= endVal; k++) {
+            totalSum += evaluateExpression(fExpr, { ...vars, x: k, X: k }).value;
+          }
+          result = result.substring(0, idx) + `(${totalSum})` + result.substring(endParen + 1);
+          searchIdx = idx;
+          continue;
+        }
+      }
+
+      searchIdx = idx + 1;
+    }
+  }
+
+  return result;
+}
+
 export function evaluateExpression(
   expr: string,
   variables: Record<string, number> = {}
@@ -19,7 +140,8 @@ export function evaluateExpression(
   }
 
   try {
-    const tokens = tokenize(trimmed);
+    const preprocessed = preprocessCalculus(trimmed, variables);
+    const tokens = tokenize(preprocessed);
     const rpn = toRPN(tokens, variables);
     const value = evaluateRPN(rpn);
     
@@ -226,6 +348,36 @@ const SCIENTIFIC_FUNCS: Record<string, (args: number[]) => number> = {
   },
   min: (args) => Math.min(...args),
   max: (args) => Math.max(...args),
+  logbase: (args) => {
+    if (args[0] <= 0 || args[0] === 1 || args[1] <= 0) throw new Error('Argumentos inválidos para logbase');
+    return Math.log(args[1]) / Math.log(args[0]);
+  },
+  pol: (args) => Math.hypot(args[0], args[1]),
+  rec: (args) => {
+    const r = args[0];
+    const theta = args[1] !== undefined ? args[1] : 0;
+    // Defaults to degree conversion if theta > 2*PI, or standard degree
+    return r * Math.cos((theta * Math.PI) / 180);
+  },
+  recd: (args) => args[0] * Math.cos((args[1] * Math.PI) / 180),
+  recr: (args) => args[0] * Math.cos(args[1]),
+  rnd: (args) => {
+    const digits = args[1] !== undefined ? Math.round(args[1]) : 4;
+    const factor = Math.pow(10, digits);
+    return Math.round(args[0] * factor) / factor;
+  },
+  ran: () => Math.random(),
+  ranint: (args) => {
+    const a = Math.round(args[0]);
+    const b = Math.round(args[1]);
+    return Math.floor(Math.random() * (b - a + 1)) + a;
+  },
+  dms: (args) => {
+    const deg = args[0] || 0;
+    const min = args[1] || 0;
+    const sec = args[2] || 0;
+    return deg + min / 60 + sec / 3600;
+  },
 };
 
 const CONSTANTS: Record<string, number> = {
@@ -233,6 +385,19 @@ const CONSTANTS: Record<string, number> = {
   PI: Math.PI,
   e: Math.E,
   E: Math.E,
+  c: 299792458, // Speed of light in m/s
+  h: 6.62607015e-34, // Planck constant in J·s
+  g: 9.80665, // Standard gravity in m/s²
+  G: 6.6743e-11, // Gravitational constant in N·m²/kg²
+  na: 6.02214076e23, // Avogadro constant
+  Na: 6.02214076e23,
+  kb: 1.380649e-23, // Boltzmann constant in J/K
+  R: 8.314462618, // Gas constant in J/(mol·K)
+  me: 9.1093837e-31, // Electron mass in kg
+  mp: 1.6726219e-27, // Proton mass in kg
+  eps0: 8.8541878e-12, // Vacuum permittivity
+  mu0: 1.256637e-6, // Vacuum permeability
+  atm: 101325, // Standard atmospheric pressure in Pa
 };
 
 function toRPN(tokens: Token[], variables: Record<string, number>): Token[] {
@@ -393,11 +558,36 @@ function evaluateRPN(rpn: Token[]): number {
         throw new Error(`Función desconocida: ${token.value}`);
       }
       // Check arity
-      if (token.value === 'pow' || token.value === 'root' || token.value === 'npr' || token.value === 'ncr') {
+      if (token.value === 'ran') {
+        stack.push(func([]));
+      } else if (
+        token.value === 'pow' ||
+        token.value === 'root' ||
+        token.value === 'npr' ||
+        token.value === 'ncr' ||
+        token.value === 'logbase' ||
+        token.value === 'pol' ||
+        token.value === 'rec' ||
+        token.value === 'ranint'
+      ) {
         if (stack.length < 2) throw new Error(`${token.value} requiere 2 argumentos`);
         const b = stack.pop()!;
         const a = stack.pop()!;
         stack.push(func([a, b]));
+      } else if (token.value === 'dms') {
+        if (stack.length >= 3) {
+          const sec = stack.pop()!;
+          const min = stack.pop()!;
+          const deg = stack.pop()!;
+          stack.push(func([deg, min, sec]));
+        } else if (stack.length >= 2) {
+          const min = stack.pop()!;
+          const deg = stack.pop()!;
+          stack.push(func([deg, min, 0]));
+        } else if (stack.length >= 1) {
+          const deg = stack.pop()!;
+          stack.push(func([deg, 0, 0]));
+        }
       } else if (token.value === 'min' || token.value === 'max' || token.value === 'sum' || token.value === 'sumatoria') {
         if (stack.length < 1) throw new Error(`${token.value} requiere argumentos`);
         const args: number[] = [];

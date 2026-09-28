@@ -10,6 +10,7 @@ import {
   ArrowRightLeft,
   Table,
   Archive,
+  Atom,
 } from 'lucide-react';
 import {
   Currency,
@@ -33,6 +34,7 @@ import { HistoryModal } from './components/HistoryModal';
 import { ExportReportModal } from './components/ExportReportModal';
 import { QuickConverterModal } from './components/QuickConverterModal';
 import { TapeCalculatorModal } from './components/TapeCalculatorModal';
+import { ModernScientificCalculator } from './components/ModernScientificCalculator';
 import { ClosedSheetsModal } from './components/ClosedSheetsModal';
 import { checkGitHubRelease, AppReleaseInfo, DEFAULT_GITHUB_REPO } from './services/updateService';
 import { SheetSharePayload } from './utils/shareImporter';
@@ -147,8 +149,8 @@ export default function App() {
   // 5. Active Row ID for keypad/variable insertion
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
 
-  // 6. Active Main Tab View (Default is 'calculator', with 'sheets' and 'converter')
-  const [activeTab, setActiveTab] = useState<'calculator' | 'sheets' | 'converter'>('calculator');
+  // 6. Active Main Tab View (Basic calc, Scientific calc, Sheets, Converter)
+  const [activeTab, setActiveTab] = useState<'basic' | 'scientific' | 'sheets' | 'converter'>('basic');
 
   // 7. Modal states
   const [isScientificOpen, setIsScientificOpen] = useState(false);
@@ -766,8 +768,8 @@ export default function App() {
       {/* 2. Main Workspace Area (Clean layout without redundant top nav) */}
       <main className="flex-1 min-h-0 w-full max-w-7xl mx-auto p-1 sm:p-2 flex flex-col overflow-hidden">
 
-        {/* VIEW 1: CALCULADORA (Básica / Científica inline con teclado fijo y scroll contenido) */}
-        {activeTab === 'calculator' && (
+        {/* VIEW 1: CALCULADORA BÁSICA (Cuentas y montos en línea con filas) */}
+        {activeTab === 'basic' && (
           <div className="w-full flex-1 min-h-0 h-full flex flex-col overflow-hidden">
             <TapeCalculatorModal
               isOpen={true}
@@ -781,7 +783,20 @@ export default function App() {
           </div>
         )}
 
-        {/* VIEW 2: CALCU DE CUENTAS (Spreadsheet Table) */}
+        {/* VIEW 2: CALCULADORA CIENTÍFICA (Natural Display, 0 scroll, funciones completas) */}
+        {activeTab === 'scientific' && (
+          <div className="w-full flex-1 min-h-0 h-full flex flex-col overflow-hidden">
+            <ModernScientificCalculator
+              onInsertResult={(result) => {
+                handleInsertToActiveRow(result);
+                setActiveTab('sheets');
+              }}
+              isInline={true}
+            />
+          </div>
+        )}
+
+        {/* VIEW 3: CALCU DE CUENTAS (Spreadsheet Table) */}
         {activeTab === 'sheets' && (
           <div className="w-full flex-1 min-h-0 h-full flex flex-col overflow-hidden">
             <SpreadsheetTable
@@ -802,11 +817,11 @@ export default function App() {
               onDeleteRow={handleDeleteRow}
               onDuplicateRow={handleDuplicateRow}
               onClearRows={handleClearRows}
-              onOpenScientificKeypad={() => setActiveTab('calculator')}
+              onOpenScientificKeypad={() => setActiveTab('scientific')}
               activeRowId={activeRowId}
               setActiveRowId={setActiveRowId}
               onOpenExportReport={() => setIsExportOpen(true)}
-              onOpenTapeCalculator={() => setActiveTab('calculator')}
+              onOpenTapeCalculator={() => setActiveTab('basic')}
               onOpenQuickConverter={() => setActiveTab('converter')}
               onInsertExpression={handleInsertToActiveRow}
               onUpdateSheetMembers={handleUpdateSheetMembers}
@@ -818,7 +833,7 @@ export default function App() {
           </div>
         )}
 
-        {/* VIEW 3: CONVERSOR RÁPIDO & REGLA DE 3 */}
+        {/* VIEW 4: CONVERSOR RÁPIDO & REGLA DE 3 */}
         {activeTab === 'converter' && (
           <div className="w-full flex-1 min-h-0 h-full overflow-y-auto">
             <QuickConverterModal
@@ -897,23 +912,36 @@ export default function App() {
         }}
       />
 
-      {/* 4. Slim, space-saving Bottom Navigation Bar */}
-      <nav aria-label="Navegación principal" className="bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 py-1 flex items-center justify-around shadow-xs shrink-0 z-20">
+      {/* 4. Slim, space-saving Bottom Navigation Bar (Docker) */}
+      <nav aria-label="Navegación principal" className="bg-white/95 backdrop-blur-md border-t border-slate-200 px-2 sm:px-4 py-1 flex items-center justify-around shadow-xs shrink-0 z-20">
         <button
-          onClick={() => setActiveTab('calculator')}
-          className={`flex flex-col items-center justify-center py-0.5 px-3 rounded-lg cursor-pointer transition-colors ${
-            activeTab === 'calculator' ? 'text-indigo-600 font-bold bg-indigo-50/70' : 'text-slate-500 hover:text-slate-800'
+          onClick={() => setActiveTab('basic')}
+          className={`flex flex-col items-center justify-center py-0.5 px-2.5 rounded-lg cursor-pointer transition-colors ${
+            activeTab === 'basic' ? 'text-indigo-600 font-bold bg-indigo-50/70' : 'text-slate-500 hover:text-slate-800'
           }`}
+          title="Calculadora básica con filas y desglose de cuentas"
         >
           <Calculator className="w-4 h-4" />
-          <span className="text-[10px] leading-tight">Calculadora</span>
+          <span className="text-[10px] leading-tight">Básica</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('scientific')}
+          className={`flex flex-col items-center justify-center py-0.5 px-2.5 rounded-lg cursor-pointer transition-colors ${
+            activeTab === 'scientific' ? 'text-indigo-600 font-bold bg-indigo-50/70' : 'text-slate-500 hover:text-slate-800'
+          }`}
+          title="Calculadora científica con pantalla natural y funciones"
+        >
+          <Atom className="w-4 h-4" />
+          <span className="text-[10px] leading-tight">Científica</span>
         </button>
 
         <button
           onClick={() => setActiveTab('sheets')}
-          className={`flex flex-col items-center justify-center py-0.5 px-3 rounded-lg cursor-pointer transition-colors ${
+          className={`flex flex-col items-center justify-center py-0.5 px-2.5 rounded-lg cursor-pointer transition-colors ${
             activeTab === 'sheets' ? 'text-blue-600 font-bold bg-blue-50/70' : 'text-slate-500 hover:text-slate-800'
           }`}
+          title="Hojas de cuentas multimoneda"
         >
           <Table className="w-4 h-4" />
           <span className="text-[10px] leading-tight">Cuentas</span>
@@ -921,9 +949,10 @@ export default function App() {
 
         <button
           onClick={() => setActiveTab('converter')}
-          className={`flex flex-col items-center justify-center py-0.5 px-3 rounded-lg cursor-pointer transition-colors ${
+          className={`flex flex-col items-center justify-center py-0.5 px-2.5 rounded-lg cursor-pointer transition-colors ${
             activeTab === 'converter' ? 'text-emerald-600 font-bold bg-emerald-50/70' : 'text-slate-500 hover:text-slate-800'
           }`}
+          title="Conversor rápido de divisas y regla de 3"
         >
           <ArrowRightLeft className="w-4 h-4" />
           <span className="text-[10px] leading-tight">Conversor</span>
@@ -931,7 +960,7 @@ export default function App() {
 
         <button
           onClick={() => setIsSettingsOpen(true)}
-          className="relative flex flex-col items-center justify-center py-0.5 px-3 rounded-lg text-slate-500 hover:text-slate-800 cursor-pointer transition-colors"
+          className="relative flex flex-col items-center justify-center py-0.5 px-2.5 rounded-lg text-slate-500 hover:text-slate-800 cursor-pointer transition-colors"
           title={hasUpdateNotification ? 'Hay una nueva versión disponible' : 'Ajustes'}
         >
           <div className="relative">

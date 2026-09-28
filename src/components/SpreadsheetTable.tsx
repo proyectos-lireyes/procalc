@@ -28,6 +28,8 @@ import {
 } from '../types';
 import { SheetSharePayload } from '../utils/shareImporter';
 import { ImportSharedModal } from './ImportSharedModal';
+import { FunctionInfoModal, FunctionHelpInfo } from './FunctionInfoModal';
+import { useLongPress } from '../utils/useLongPress';
 import {
   ALL_CURRENCIES,
   CURRENCY_CONFIG,
@@ -97,6 +99,100 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   const [editingSheetTitle, setEditingSheetTitle] = useState(false);
   const [tempTitle, setTempTitle] = useState(sheet.title);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [helpInfo, setHelpInfo] = useState<FunctionHelpInfo | null>(null);
+
+  // Column toggle handler: specifically toggles the "Pagar" column
+  const handleTogglePaymentColumn = () => {
+    setShowPaymentColumn((prev) => !prev);
+  };
+
+  // Long press hooks for toolbar functions
+  const importLongPress = useLongPress({
+    onLongPress: () => {
+      setHelpInfo({
+        title: 'Importar Cuenta',
+        badge: 'Cuentas',
+        icon: <Download className="w-5 h-5 text-indigo-600" />,
+        description:
+          'Permite cargar una cuenta u hoja de cálculos compartida por otra persona pegando el texto recibido por WhatsApp o el código directo de importación.',
+        tips: [
+          'No sobreescribe ni borra tus otras cuentas existentes',
+          'Detecta automáticamente los códigos del portapapeles',
+        ],
+      });
+    },
+    onClick: () => setIsImportModalOpen(true),
+  });
+
+  const exportLongPress = useLongPress({
+    onLongPress: () => {
+      setHelpInfo({
+        title: 'Exportar y Compartir',
+        badge: 'Reportes',
+        icon: <Share2 className="w-5 h-5 text-blue-600" />,
+        description:
+          'Genera un reporte detallado con el desglose de todas las filas y totales en las 4 divisas (USD, VES, USDT, EUR). Permite compartir por WhatsApp o descargar comprobantes.',
+        tips: [
+          'Incluye un código para que la otra persona importe la cuenta completa',
+          'Presenta totales exactos en todas las monedas',
+        ],
+      });
+    },
+    onClick: () => {
+      if (onOpenExportReport) onOpenExportReport();
+    },
+  });
+
+  const vaciarLongPress = useLongPress({
+    onLongPress: () => {
+      setHelpInfo({
+        title: 'Vaciar Cuenta',
+        badge: 'Edición',
+        icon: <Trash2 className="w-5 h-5 text-rose-600" />,
+        description:
+          'Borra todas las operaciones y filas de la cuenta actualmente abierta para iniciar cálculos desde cero. Siempre solicita confirmación antes de limpiar.',
+        tips: [
+          'Solo afecta a la cuenta en pantalla',
+          'No elimina la cuenta ni afecta al resto de tus hojas',
+        ],
+      });
+    },
+    onClick: () => setConfirmClearRows(true),
+  });
+
+  const mostrarLongPress = useLongPress({
+    onLongPress: () => {
+      setHelpInfo({
+        title: 'Mostrar / Ocultar Columna de Pago',
+        badge: 'Visualización',
+        icon: <Eye className="w-5 h-5 text-blue-600" />,
+        description:
+          `Muestra u oculta la columna de pago (${settings.paymentCurrency}). Al ocultarla, ganas espacio horizontal en la tabla para la descripción y montos principales.`,
+        tips: [
+          'Pulsa para ocultar o mostrar la columna de pago',
+          'Recomendado en celulares para ver descripciones más amplias',
+        ],
+      });
+    },
+    onClick: handleTogglePaymentColumn,
+  });
+
+  const tricountLongPress = useLongPress({
+    onLongPress: () => {
+      setHelpInfo({
+        title: 'Tricount (División de Gastos)',
+        badge: 'Miembros',
+        icon: <Users className="w-5 h-5 text-emerald-600" />,
+        description:
+          'Activa la división de gastos entre amigos o compañeros de viaje. Permite asignar quién pagó cada fila y calcula las transferencias mínimas para saldar deudas en cualquier moneda.',
+        tips: [
+          'Agrega miembros y asigna pagadores fila por fila',
+          'Calcula automáticamente quién le debe a quién en $, Bs, USDT y EUR',
+        ],
+      });
+    },
+    onClick: () => setIsTricountModalOpen(true),
+  });
 
   // In-app confirmation and modal states
   const [sheetToClose, setSheetToClose] = useState<Sheet | null>(null);
@@ -423,10 +519,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
               <div
                 key={s.id}
                 onClick={() => {
-                  if (isCurrent) {
-                    setTempTitle(s.title);
-                    setEditingSheetTitle(true);
-                  } else {
+                  if (!isCurrent) {
                     onSelectSheet(s.id);
                     setEditingSheetTitle(false);
                   }
@@ -436,7 +529,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                     ? 'bg-white border-slate-200 text-blue-700 shadow-2xs font-bold'
                     : 'bg-slate-200/70 border-transparent text-slate-600 hover:bg-slate-200 hover:text-slate-900'
                 }`}
-                title={isCurrent ? 'Toca para cambiar nombre' : s.title}
+                title={isCurrent ? 'Haz clic sobre el nombre para cambiarlo' : s.title}
               >
                 <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
 
@@ -468,10 +561,37 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                   </div>
                 ) : (
                   <>
-                    <span className="truncate max-w-[90px] sm:max-w-[140px]">{s.title}</span>
-                    {isCurrent && (
-                      <Edit2 className="w-2.5 h-2.5 text-blue-400 opacity-60 group-hover:opacity-100 shrink-0" />
-                    )}
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isCurrent) {
+                          onSelectSheet(s.id);
+                        }
+                        setTempTitle(s.title);
+                        setEditingSheetTitle(true);
+                      }}
+                      className="truncate max-w-[90px] sm:max-w-[140px] hover:underline cursor-pointer"
+                      title="Haz clic sobre el nombre para cambiarlo"
+                    >
+                      {s.title}
+                    </span>
+
+                    {/* BOTÓN CERRAR CUENTA JUSTO AL LADO DEL NOMBRE (DONDE ESTABA EL LÁPIZ) */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSheetToClose(s);
+                      }}
+                      className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ml-0.5 ${
+                        isCurrent
+                          ? 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                          : 'text-slate-400 hover:text-slate-700 hover:bg-slate-300'
+                      }`}
+                      title="Cerrar esta cuenta"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </>
                 )}
               </div>
@@ -750,134 +870,105 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
         )}
       </div>
 
-      {/* 5. Spreadsheet Footer Toolbar: Tricount, Columnas, Exportar, Vaciar, Cerrar cuenta */}
-      <div className="px-2 sm:px-3 py-1.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-1.5 text-xs shrink-0">
-        {/* Left: Tricount + Column Toggles (Mostrar / Pagar) */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {/* TRICOUNT BUTTON */}
+      {/* 5. Spreadsheet Footer Toolbar: Importar, Exportar, Vaciar, Mostrar, Tricount distribuidos al 100% */}
+      <div className="px-1.5 sm:px-3 py-1.5 bg-slate-50 border-t border-slate-200 shrink-0 select-none">
+        <div className="grid grid-cols-5 gap-1 sm:gap-1.5 w-full">
+          {/* 1. IMPORTAR */}
+          {onImportSheet ? (
+            <button
+              type="button"
+              {...importLongPress.handlers}
+              className="w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 bg-white hover:bg-slate-100 text-indigo-700 rounded border border-indigo-200 text-[11px] sm:text-xs font-bold transition-colors cursor-pointer shadow-2xs active:scale-95 min-w-0"
+              title="Importar cuenta u hoja (Mantén presionado para ver qué hace)"
+            >
+              <Download className="w-3.5 h-3.5 shrink-0 text-indigo-600" />
+              <span className="truncate">Importar</span>
+            </button>
+          ) : (
+            <div />
+          )}
+
+          {/* 2. EXPORTAR (Icono de compartir) */}
+          {onOpenExportReport ? (
+            <button
+              type="button"
+              {...exportLongPress.handlers}
+              className="w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 bg-white hover:bg-slate-100 text-blue-700 rounded border border-blue-200 text-[11px] sm:text-xs font-bold transition-colors cursor-pointer shadow-2xs active:scale-95 min-w-0"
+              title="Exportar reporte y compartir (Mantén presionado para ver qué hace)"
+            >
+              <Share2 className="w-3.5 h-3.5 shrink-0 text-blue-600" />
+              <span className="truncate">Exportar</span>
+            </button>
+          ) : (
+            <div />
+          )}
+
+          {/* 3. VACIAR */}
+          <div className="w-full min-w-0">
+            {confirmClearRows ? (
+              <div className="w-full flex items-center justify-center gap-0.5 bg-rose-50 border border-rose-200 rounded py-0.5 px-0.5 text-[10px] sm:text-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClearRows();
+                    setConfirmClearRows(false);
+                  }}
+                  className="px-1 sm:px-1.5 py-0.5 bg-rose-600 text-white font-bold rounded hover:bg-rose-700 cursor-pointer"
+                  title="Confirmar vaciar filas"
+                >
+                  Sí
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearRows(false)}
+                  className="px-0.5 sm:px-1 py-0.5 text-slate-600 hover:text-slate-900 cursor-pointer text-[10px]"
+                  title="Cancelar"
+                >
+                  No
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                {...vaciarLongPress.handlers}
+                className="w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-700 rounded border border-slate-300 hover:border-rose-300 text-[11px] sm:text-xs font-bold transition-colors cursor-pointer shadow-2xs active:scale-95 min-w-0"
+                title="Vaciar todas las filas (Mantén presionado para ver qué hace)"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                <span className="truncate">Vaciar</span>
+              </button>
+            )}
+          </div>
+
+          {/* 4. MOSTRAR (Muestra / oculta la columna de pagar) */}
+          <button
+            type="button"
+            {...mostrarLongPress.handlers}
+            className={`w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 rounded text-[11px] sm:text-xs font-bold transition-colors cursor-pointer shadow-2xs active:scale-95 min-w-0 border ${
+              showPaymentColumn
+                ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
+                : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50'
+            }`}
+            title={`Mostrar u ocultar columna de pago (${settings.paymentCurrency}) (Mantén presionado para ver qué hace)`}
+          >
+            <Eye className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Mostrar</span>
+          </button>
+
+          {/* 5. TRICOUNT */}
           <button
             id="tricount-account-btn"
             type="button"
-            onClick={() => setIsTricountModalOpen(true)}
-            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold transition-all cursor-pointer shadow-2xs ${
+            {...tricountLongPress.handlers}
+            className={`w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 rounded text-[11px] sm:text-xs font-bold transition-all cursor-pointer shadow-2xs active:scale-95 min-w-0 border ${
               isTricountActive
-                ? 'bg-emerald-600 text-white hover:bg-emerald-500'
-                : 'bg-white text-emerald-800 border border-emerald-300 hover:bg-emerald-50'
+                ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-500'
+                : 'bg-white text-emerald-800 border-emerald-300 hover:bg-emerald-50'
             }`}
-            title="Abrir opciones de Tricount y liquidación"
+            title="Opciones de Tricount (Mantén presionado para ver qué hace)"
           >
-            <Users className="w-3.5 h-3.5" />
-            <span>{isTricountActive ? `Tricount (${members.length})` : 'Tricount'}</span>
-          </button>
-
-          {/* TOGGLES PARA MOSTRAR / OCULTAR COLUMNAS MOSTRAR Y PAGAR (Solo iconos) */}
-          <div className="flex items-center gap-1 border-l border-slate-300 pl-1.5">
-            <button
-              type="button"
-              onClick={() => {
-                if (showDisplayColumn && !showPaymentColumn) return;
-                setShowDisplayColumn((prev) => !prev);
-              }}
-              className={`p-1 rounded transition-all cursor-pointer border shadow-2xs ${
-                showDisplayColumn
-                  ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
-                  : 'bg-white text-slate-400 border-slate-300 opacity-60 hover:opacity-100'
-              }`}
-              title={`Columna Mostrar (${settings.displayCurrency})`}
-              aria-label="Columna Mostrar"
-            >
-              <Eye className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (showPaymentColumn && !showDisplayColumn) return;
-                setShowPaymentColumn((prev) => !prev);
-              }}
-              className={`p-1 rounded transition-all cursor-pointer border shadow-2xs ${
-                showPaymentColumn
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
-                  : 'bg-white text-slate-400 border-slate-300 opacity-60 hover:opacity-100'
-              }`}
-              title={`Columna Pagar (${settings.paymentCurrency})`}
-              aria-label="Columna Pagar"
-            >
-              <CreditCard className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Right: Exportar Reporte + Importar + Vaciar cuenta + Cerrar cuenta */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {onImportSheet && (
-            <button
-              type="button"
-              onClick={() => setIsImportModalOpen(true)}
-              className="px-2 py-1 bg-white hover:bg-slate-100 text-indigo-700 rounded border border-indigo-200 transition-colors cursor-pointer shadow-2xs active:scale-95 flex items-center gap-1 text-xs font-bold"
-              title="Importar cuenta u hoja compartida"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Importar</span>
-            </button>
-          )}
-
-          {onOpenExportReport && (
-            <button
-              type="button"
-              onClick={onOpenExportReport}
-              className="p-1 bg-white hover:bg-slate-100 text-slate-700 rounded border border-slate-300 transition-colors cursor-pointer shadow-2xs active:scale-95"
-              title="Exportar reporte"
-              aria-label="Exportar reporte"
-            >
-              <FileText className="w-3.5 h-3.5 text-slate-600" />
-            </button>
-          )}
-
-          {computedRows.length > 0 && (
-            <div>
-              {confirmClearRows ? (
-                <div className="flex items-center gap-1 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5 text-xs">
-                  <span className="text-rose-800 font-medium text-[11px]">¿Vaciar?</span>
-                  <button
-                    onClick={() => {
-                      onClearRows();
-                      setConfirmClearRows(false);
-                    }}
-                    className="px-2 py-0.5 bg-rose-600 text-white font-bold rounded text-[11px] hover:bg-rose-700 cursor-pointer"
-                  >
-                    Sí
-                  </button>
-                  <button
-                    onClick={() => setConfirmClearRows(false)}
-                    className="px-1.5 py-0.5 text-slate-600 text-[11px] hover:text-slate-900 cursor-pointer"
-                  >
-                    No
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmClearRows(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded border border-slate-300 hover:border-rose-300 text-xs font-semibold transition-colors cursor-pointer shadow-2xs active:scale-95"
-                  title="Vaciar todas las filas de la cuenta"
-                >
-                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-                  <span>Vaciar</span>
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* CERRAR CUENTA BUTTON (Abre modal centrado) */}
-          <button
-            id="close-account-btn"
-            type="button"
-            onClick={() => setSheetToClose(sheet)}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-300 hover:border-rose-300 text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
-            title="Cerrar esta cuenta"
-          >
-            <X className="w-3.5 h-3.5 text-rose-500" />
-            <span>Cerrar</span>
+            <Users className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">{isTricountActive ? `Tric. (${members.length})` : 'Tricount'}</span>
           </button>
         </div>
       </div>
@@ -1527,6 +1618,12 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
           onImportSheet={onImportSheet}
         />
       )}
+
+      {/* MODAL DE INFORMACIÓN DE FUNCIONES EN PULSACIÓN LARGA */}
+      <FunctionInfoModal
+        info={helpInfo}
+        onClose={() => setHelpInfo(null)}
+      />
     </div>
   );
 };

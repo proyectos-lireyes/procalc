@@ -17,8 +17,10 @@ import {
 import { evaluateExpression } from '../utils/mathEvaluator';
 import { formatNumber } from '../utils/currency';
 import { useVirtualKeyboard } from '../utils/useVirtualKeyboard';
+import { useLongPress } from '../utils/useLongPress';
 import { encodeCalcAccountShare, CalcSharePayload } from '../utils/shareImporter';
 import { ImportSharedModal } from './ImportSharedModal';
+import { FunctionInfoModal, FunctionHelpInfo } from './FunctionInfoModal';
 
 interface TapeCalculatorModalProps {
   isOpen: boolean;
@@ -101,16 +103,12 @@ const getInitialActiveAccountId = (accs: CalculatorAccount[]): string => {
   return accs[0]?.id || 'acc_1';
 };
 
-type CalcMode = 'basic' | 'fx991es';
-type AngleUnit = 'deg' | 'rad';
-
 export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
   isOpen,
   onClose,
   onInsertResult,
   isInline = false,
 }) => {
-  const [calcMode, setCalcMode] = useState<CalcMode>('basic');
   const [accounts, setAccounts] = useState<CalculatorAccount[]>(getInitialAccounts);
   const [activeAccountId, setActiveAccountId] = useState<string>(() => getInitialActiveAccountId(accounts));
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
@@ -177,14 +175,6 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
   // Input refs for automatic focus
   const exprInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  // Scientific Mode State (Casio FX-991ES)
-  const [sciExpr, setSciExpr] = useState<string>('');
-  const [sciAngleUnit, setSciAngleUnit] = useState<AngleUnit>('deg');
-  const [isShiftActive, setIsShiftActive] = useState<boolean>(false);
-  const [isAlphaActive, setIsAlphaActive] = useState<boolean>(false);
-  const [showAsFraction, setShowAsFraction] = useState<boolean>(false);
-  const [sciHistory, setSciHistory] = useState<string[]>([]);
-  const [sciHistoryIdx, setSciHistoryIdx] = useState<number>(-1);
   const [rowToDelete, setRowToDelete] = useState<{
     id: string;
     lineNum: number;
@@ -192,21 +182,15 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
     expression: string;
   } | null>(null);
 
-  const sciInputRef = useRef<HTMLInputElement | null>(null);
-
   useEffect(() => {
-    if (isOpen && calcMode === 'basic' && rows.length > 0) {
+    if (isOpen && rows.length > 0) {
       const lastId = rows[rows.length - 1].id;
       setActiveRowId(lastId);
       setTimeout(() => {
         exprInputRefs.current[lastId]?.focus();
       }, 50);
-    } else if (isOpen && calcMode === 'fx991es') {
-      setTimeout(() => {
-        sciInputRef.current?.focus();
-      }, 50);
     }
-  }, [isOpen, calcMode, activeAccountId]);
+  }, [isOpen, activeAccountId]);
 
   // BASIC MODE: Sequential evaluation of rows
   const computedTapeRows = useMemo(() => {
@@ -527,220 +511,41 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
     setTimeout(() => setCopiedTape(false), 2000);
   };
 
-  // SCIENTIFIC MODE EVALUATION (FX-991ES)
-  const sciEvaluation = useMemo(() => {
-    if (!sciExpr.trim()) {
-      return { isValid: true, value: 0, fraction: '0/1', formatted: '0' };
-    }
+  const [helpInfo, setHelpInfo] = useState<FunctionHelpInfo | null>(null);
 
-    let processed = sciExpr;
-    if (sciAngleUnit === 'deg') {
-      processed = processed
-        .replace(/\bsin\(/g, 'sind(')
-        .replace(/\bcos\(/g, 'cosd(')
-        .replace(/\btan\(/g, 'tand(')
-        .replace(/\basin\(/g, 'asind(')
-        .replace(/\bacos\(/g, 'acosd(')
-        .replace(/\batan\(/g, 'atand(');
-    }
+  const shareLongPress = useLongPress({
+    onLongPress: () => {
+      setHelpInfo({
+        title: 'Compartir cuenta',
+        badge: 'Calcu Básica',
+        icon: <Share2 className="w-5 h-5 text-indigo-600" />,
+        description:
+          'Genera y copia al portapapeles el desglose detallado de todos los conceptos, operaciones y el total acumulado de esta cuenta. Además, adjunta un código especial para que otra persona pueda importarla directamente en su aplicación.',
+        tips: [
+          'Listo para enviar por WhatsApp, Telegram o notas',
+          'La otra persona solo debe copiar tu mensaje y pulsar "Importar"',
+        ],
+      });
+    },
+    onClick: handleShareFullAccount,
+  });
 
-    const res = evaluateExpression(processed);
-    if (!res.isValid) {
-      return { isValid: false, error: res.error, value: 0, fraction: '', formatted: 'Syntax ERROR' };
-    }
-
-    const val = res.value;
-
-    // Convert decimal to simplified fraction (e.g. 2.4 -> 12/5)
-    const toFraction = (num: number): string => {
-      if (Number.isInteger(num)) return `${num}`;
-      const tolerance = 1.0e-6;
-      let h1 = 1, h2 = 0, k1 = 0, k2 = 1;
-      let b = num;
-      do {
-        const a = Math.floor(b);
-        let aux = h1;
-        h1 = a * h1 + h2;
-        h2 = aux;
-        aux = k1;
-        k1 = a * k1 + k2;
-        k2 = aux;
-        b = 1 / (b - a);
-      } while (Math.abs(num - h1 / k1) > num * tolerance && k1 < 10000);
-
-      return `${h1}/${k1}`;
-    };
-
-    const fractionStr = toFraction(val);
-
-    return {
-      isValid: true,
-      value: val,
-      fraction: fractionStr,
-      formatted: formatNumber(val, 6).replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, ''),
-    };
-  }, [sciExpr, sciAngleUnit]);
-
-  // Insert token in Casio FX-991ES at cursor position
-  const handleInsertSciToken = (token: string) => {
-    const input = sciInputRef.current;
-    const start = input?.selectionStart ?? sciExpr.length;
-    const end = input?.selectionEnd ?? sciExpr.length;
-
-    let insertText = token;
-    let cursorOffset = token.length;
-
-    if (token === 'AC') {
-      setSciExpr('');
-      return;
-    }
-
-    if (token === 'DEL') {
-      if (start === end) {
-        if (start > 0) {
-          const newText = sciExpr.slice(0, start - 1) + sciExpr.slice(end);
-          setSciExpr(newText);
-          setTimeout(() => {
-            if (input) {
-              input.selectionStart = input.selectionEnd = start - 1;
-              input.focus();
-            }
-          }, 10);
-        }
-      } else {
-        const newText = sciExpr.slice(0, start) + sciExpr.slice(end);
-        setSciExpr(newText);
-        setTimeout(() => {
-          if (input) {
-            input.selectionStart = input.selectionEnd = start;
-            input.focus();
-          }
-        }, 10);
-      }
-      return;
-    }
-
-    if (token === 'FRAC') {
-      insertText = '/';
-      cursorOffset = 1;
-    } else if (token === 'SQRT') {
-      insertText = 'sqrt(';
-      cursorOffset = 5;
-    } else if (token === 'CBRT') {
-      insertText = 'cbrt(';
-      cursorOffset = 5;
-    } else if (token === 'POW') {
-      insertText = '^(';
-      cursorOffset = 2;
-    } else if (token === 'SQR') {
-      insertText = '^2';
-      cursorOffset = 2;
-    } else if (token === 'CUBE') {
-      insertText = '^3';
-      cursorOffset = 2;
-    } else if (token === 'INV') {
-      insertText = '^(-1)';
-      cursorOffset = 5;
-    } else if (token === 'EXP10') {
-      insertText = '*10^(';
-      cursorOffset = 5;
-    } else if (token === 'EXP_E') {
-      insertText = 'exp(';
-      cursorOffset = 4;
-    } else if (token === 'FACT') {
-      insertText = '!';
-      cursorOffset = 1;
-    } else if (token === 'SUM') {
-      insertText = 'sumatoria(';
-      cursorOffset = 10;
-    } else if (token === 'PCT') {
-      insertText = '%';
-      cursorOffset = 1;
-    }
-
-    const newExpr = sciExpr.slice(0, start) + insertText + sciExpr.slice(end);
-    setSciExpr(newExpr);
-
-    setTimeout(() => {
-      if (input) {
-        input.selectionStart = input.selectionEnd = start + cursorOffset;
-        input.focus();
-      }
-    }, 10);
-
-    setIsShiftActive(false);
-    setIsAlphaActive(false);
-  };
-
-  // Replay D-Pad Navigation in FX-991ES
-  const handleDpadMove = (direction: 'left' | 'right' | 'up' | 'down') => {
-    const input = sciInputRef.current;
-    if (!input) return;
-
-    if (direction === 'left') {
-      const pos = Math.max(0, (input.selectionStart ?? 0) - 1);
-      input.selectionStart = input.selectionEnd = pos;
-      input.focus();
-    } else if (direction === 'right') {
-      const pos = Math.min(sciExpr.length, (input.selectionEnd ?? 0) + 1);
-      input.selectionStart = input.selectionEnd = pos;
-      input.focus();
-    } else if (direction === 'up') {
-      if (sciHistory.length > 0) {
-        const nextIdx = Math.min(sciHistory.length - 1, sciHistoryIdx + 1);
-        setSciHistoryIdx(nextIdx);
-        setSciExpr(sciHistory[sciHistory.length - 1 - nextIdx]);
-      }
-    } else if (direction === 'down') {
-      if (sciHistoryIdx > 0) {
-        const nextIdx = sciHistoryIdx - 1;
-        setSciHistoryIdx(nextIdx);
-        setSciExpr(sciHistory[sciHistory.length - 1 - nextIdx]);
-      } else if (sciHistoryIdx === 0) {
-        setSciHistoryIdx(-1);
-        setSciExpr('');
-      }
-    }
-  };
-
-  // Press EQUAL in Casio mode
-  const handleSciEqual = () => {
-    if (sciEvaluation.isValid && sciExpr.trim()) {
-      setSciHistory((prev) => [...prev.filter((h) => h !== sciExpr), sciExpr]);
-      setSciHistoryIdx(-1);
-    }
-  };
-
-  // Helper to render Casio Natural VPAM stacked fractions in real-time
-  const renderNaturalDisplay = (expr: string) => {
-    if (!expr) return <span className="opacity-40 font-mono">0</span>;
-
-    // Split by major terms (+ and - outside parentheses) or tokenize fractions like `a/b`
-    const tokens = expr.split(/(\s*[+\-*]\s*)/g);
-
-    return (
-      <div className="flex items-center flex-wrap gap-1 font-mono text-sm sm:text-base leading-none py-1">
-        {tokens.map((token, idx) => {
-          if (token.includes('/') && !token.includes('//')) {
-            const parts = token.split('/');
-            const num = parts[0]?.trim();
-            const den = parts.slice(1).join('/')?.trim();
-            return (
-              <span key={idx} className="inline-flex flex-col items-center justify-center mx-1 align-middle">
-                <span className="border-b-2 border-[#1D2B1A] px-1 text-center font-bold text-xs sm:text-sm">
-                  {num || '1'}
-                </span>
-                <span className="px-1 text-center font-bold text-xs sm:text-sm">
-                  {den || '1'}
-                </span>
-              </span>
-            );
-          }
-          return <span key={idx} className="font-bold">{token}</span>;
-        })}
-      </div>
-    );
-  };
+  const importLongPress = useLongPress({
+    onLongPress: () => {
+      setHelpInfo({
+        title: 'Importar cuenta',
+        badge: 'Calcu Básica',
+        icon: <Download className="w-5 h-5 text-indigo-600" />,
+        description:
+          'Abre la ventana para cargar una cuenta compartida. Puedes pegar el texto completo recibido por mensajería o el código de cuenta, y se restaurarán todas las filas y operaciones.',
+        tips: [
+          'Detecta automáticamente códigos en el portapapeles',
+          'Permite crear una nueva cuenta o sobrescribir la actual',
+        ],
+      });
+    },
+    onClick: () => setIsImportModalOpen(true),
+  });
 
   if (!isOpen) return null;
 
@@ -749,80 +554,25 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
       id="calculator-modal"
       className={
         isInline
-          ? `w-full h-full max-h-full rounded-xl border shadow-xs flex flex-col min-h-0 overflow-hidden select-none ${
-              calcMode === 'fx991es'
-                ? 'bg-slate-950 text-slate-100 border-slate-800'
-                : 'bg-white text-slate-800 border-slate-200'
-            }`
-          : `fixed inset-0 z-50 flex flex-col w-full h-[100dvh] max-h-[100dvh] overflow-hidden select-none ${
-              calcMode === 'fx991es' ? 'bg-slate-950 text-slate-100' : 'bg-white text-slate-800'
-            }`
+          ? 'w-full h-full max-h-full rounded-xl border border-slate-200 shadow-xs flex flex-col min-h-0 overflow-hidden select-none bg-white text-slate-800'
+          : 'fixed inset-0 z-50 flex flex-col w-full h-[100dvh] max-h-[100dvh] overflow-hidden select-none bg-white text-slate-800'
       }
     >
-      {/* Clean Header: Title + Mode Switcher */}
-      <div
-        className={`flex items-center justify-between px-3 sm:px-6 py-2 sm:py-2.5 border-b shrink-0 ${
-          calcMode === 'fx991es'
-            ? 'border-slate-800 bg-slate-900 text-slate-100'
-            : 'border-slate-200 bg-slate-50 text-slate-900'
-        }`}
-      >
-        <div className="flex items-center gap-3 sm:gap-4">
-          <h3 className="font-bold text-sm sm:text-base">
-            Calculadora
-          </h3>
-
-          {/* Mode Switcher (Básica / Científica) */}
-          <div
-            className={`flex items-center p-0.5 rounded-lg text-xs ${
-              calcMode === 'fx991es' ? 'bg-slate-800' : 'bg-slate-200/80'
-            }`}
-          >
-            <button
-              type="button"
-              onClick={() => setCalcMode('basic')}
-              className={`py-1 px-3.5 rounded-md font-bold transition-all cursor-pointer ${
-                calcMode === 'basic'
-                  ? 'bg-white text-indigo-700 shadow-2xs'
-                  : calcMode === 'fx991es'
-                  ? 'text-slate-400 hover:text-white'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Básica
-            </button>
-            <button
-              type="button"
-              onClick={() => setCalcMode('fx991es')}
-              className={`py-1 px-3.5 rounded-md font-bold transition-all cursor-pointer ${
-                calcMode === 'fx991es'
-                  ? 'bg-indigo-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Científica
-            </button>
-          </div>
-        </div>
-
-        {!isInline && (
+      {/* Header: Only shown if modal is opened standalone with close button */}
+      {!isInline && (
+        <div className="flex items-center justify-end px-3 sm:px-6 py-2 border-b border-slate-200 bg-slate-50 text-slate-900 shrink-0">
           <button
             onClick={onClose}
-            className={`p-1.5 sm:p-2 rounded-lg transition-colors cursor-pointer ${
-              calcMode === 'fx991es'
-                ? 'text-slate-400 hover:text-white hover:bg-slate-800'
-                : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200'
-            }`}
+            className="p-1.5 sm:p-2 rounded-lg transition-colors cursor-pointer text-slate-500 hover:text-slate-900 hover:bg-slate-200"
             title="Cerrar calculadora"
           >
             <X className="w-5 h-5" />
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* MODE 1: BASIC LINE CALCULATOR (Full screen Excel-like with automatic focus on Monto) */}
-      {calcMode === 'basic' && (
-        <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full max-w-4xl mx-auto h-full">
+      {/* BASIC LINE CALCULATOR (Full screen Excel-like with automatic focus on Monto) */}
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full max-w-4xl mx-auto h-full">
           {/* CUENTAS TABS BAR */}
           <div className="bg-slate-100/90 border-b border-slate-200 px-2 sm:px-3 py-1.5 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
             <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mr-1 shrink-0 flex items-center gap-1">
@@ -869,7 +619,16 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                     />
                   ) : (
                     <div className="flex items-center gap-1.5">
-                      <span className="truncate max-w-[120px] font-bold">{acc.name}</span>
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartRenameAccount(acc, e);
+                        }}
+                        className="truncate max-w-[120px] font-bold cursor-pointer hover:underline"
+                        title="Haz clic para cambiar el nombre"
+                      >
+                        {acc.name}
+                      </span>
                       <span
                         className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ${
                           isActive
@@ -882,17 +641,6 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                     </div>
                   )}
 
-                  {!isEditing && (
-                    <button
-                      type="button"
-                      onClick={(e) => handleStartRenameAccount(acc, e)}
-                      className="opacity-60 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-0.5 hover:text-indigo-600 rounded transition-opacity cursor-pointer"
-                      title="Renombrar cuenta"
-                    >
-                      <Edit2 className="w-3 h-3" />
-                    </button>
-                  )}
-
                   <button
                     type="button"
                     onClick={(e) => handleRequestDeleteAccount(acc, e)}
@@ -901,9 +649,9 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                         ? 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
                         : 'text-slate-400 hover:text-slate-700 hover:bg-slate-300'
                     }`}
-                    title="Cerrar / Eliminar cuenta"
+                    title="Cerrar cuenta"
                   >
-                    <X className="w-3 h-3" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
               );
@@ -1042,33 +790,33 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
             </table>
           </div>
 
-          {/* Basic Calculator Summary Bar (Compartir cuenta, Importar y Total) */}
-          <div className="bg-white px-3 py-2 border-t border-b border-slate-200 flex items-center justify-between gap-2 shrink-0 flex-wrap">
-            <div className="flex items-center gap-1.5">
+          {/* Basic Calculator Summary Bar (Compartir cuenta, Importar y Total en la misma línea) */}
+          <div className="bg-white px-2 sm:px-3 py-1.5 border-t border-b border-slate-200 flex items-center justify-between gap-1.5 sm:gap-2 shrink-0 flex-nowrap overflow-x-auto scrollbar-none">
+            <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
               <button
                 type="button"
-                onClick={handleShareFullAccount}
-                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs active:scale-95"
-                title="Copiar desglose completo con código de importación"
+                {...shareLongPress.handlers}
+                className="px-2.5 sm:px-3 py-1 sm:py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs active:scale-95 whitespace-nowrap"
+                title="Compartir cuenta (Mantén presionado para ver qué hace)"
               >
-                <Share2 className="w-3.5 h-3.5" />
+                <Share2 className="w-3.5 h-3.5 shrink-0 text-slate-600" />
                 <span>{copiedTape ? '¡Copiado!' : 'Compartir cuenta'}</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => setIsImportModalOpen(true)}
-                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer border border-indigo-200 shadow-2xs active:scale-95"
-                title="Importar cuenta compartida desde mensaje o portapapeles"
+                {...importLongPress.handlers}
+                className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer border border-indigo-200 shadow-2xs active:scale-95 whitespace-nowrap"
+                title="Importar cuenta (Mantén presionado para ver qué hace)"
               >
-                <Download className="w-3.5 h-3.5" />
+                <Download className="w-3.5 h-3.5 shrink-0 text-indigo-600" />
                 <span>Importar</span>
               </button>
             </div>
 
-            <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-1 flex items-center gap-2 shadow-2xs">
+            <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-2.5 sm:px-3 py-1 flex items-center gap-1.5 sm:gap-2 shadow-2xs shrink-0 whitespace-nowrap">
               <span className="text-xs font-bold text-indigo-900">Total:</span>
-              <span className="text-base sm:text-lg font-mono font-extrabold text-indigo-900">
+              <span className="text-sm sm:text-base font-mono font-extrabold text-indigo-900">
                 {formatNumber(grandTotal, 2)}
               </span>
             </div>
@@ -1227,434 +975,6 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
             </div>
           )}
         </div>
-      )}
-
-      {/* MODE 2: CASIO FX-991ES SCIENTIFIC CALCULATOR (Fullscreen Natural V.P.A.M. & No Scroll) */}
-      {calcMode === 'fx991es' && (
-        <div className="flex flex-col flex-1 min-h-0 p-2 sm:p-3 bg-slate-950 text-slate-100 overflow-hidden items-center justify-between h-full">
-          <div className="w-full max-w-lg flex flex-col gap-1.5 sm:gap-2 h-full flex-1 min-h-0 justify-between">
-            {/* Casio Natural Display Screen */}
-            <div className="bg-[#A4B598] text-[#1D2B1A] border-4 border-slate-800 rounded-lg p-3 font-mono shadow-inner shrink-0">
-              {/* Screen Top Status Badges */}
-              <div className="flex items-center justify-between text-[10px] font-extrabold tracking-wider border-b border-[#1D2B1A]/20 pb-1 mb-1">
-                <div className="flex items-center gap-2">
-                  <span className={isShiftActive ? 'bg-[#1D2B1A] text-[#A4B598] px-1 rounded' : 'opacity-30'}>
-                    S
-                  </span>
-                  <span className={isAlphaActive ? 'bg-[#1D2B1A] text-[#A4B598] px-1 rounded' : 'opacity-30'}>
-                    A
-                  </span>
-                  <span className="bg-[#1D2B1A] text-[#A4B598] px-1 rounded">
-                    {sciAngleUnit.toUpperCase()}
-                  </span>
-                  <span className="opacity-40">MATH</span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setSciAngleUnit((prev) => (prev === 'deg' ? 'rad' : 'deg'))}
-                    className="text-[9px] bg-[#1D2B1A]/20 hover:bg-[#1D2B1A]/40 px-1.5 py-0.5 rounded cursor-pointer font-bold"
-                  >
-                    {sciAngleUnit === 'deg' ? 'DEG➔RAD' : 'RAD➔DEG'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Natural Fraction Visual Screen (Render natural mathematical fractions live while typing) */}
-              <div className="min-h-[52px] flex flex-col justify-center">
-                {/* Visual live rendering of stacked fractions */}
-                <div className="min-h-[28px] flex items-center overflow-x-auto scrollbar-none">
-                  {renderNaturalDisplay(sciExpr)}
-                </div>
-
-                {/* Raw Input Bar with Cursor */}
-                <input
-                  ref={sciInputRef}
-                  type="text"
-                  inputMode="none"
-                  value={sciExpr}
-                  onChange={(e) => setSciExpr(e.target.value)}
-                  placeholder="0"
-                  className="w-full bg-transparent text-xs font-mono font-semibold text-[#1D2B1A]/80 focus:outline-none tracking-wider border-t border-[#1D2B1A]/10 pt-0.5"
-                />
-              </div>
-
-              {/* Evaluated Result Line */}
-              <div className="flex items-center justify-between pt-1 border-t border-[#1D2B1A]/20">
-                <button
-                  type="button"
-                  onClick={() => setShowAsFraction(!showAsFraction)}
-                  className="text-[10px] bg-[#1D2B1A]/20 hover:bg-[#1D2B1A]/40 px-1.5 py-0.5 rounded font-bold cursor-pointer"
-                  title="Alternar entre decimal y fracción"
-                >
-                  S ⇔ D
-                </button>
-
-                <div className="text-right">
-                  {showAsFraction && sciEvaluation.fraction && sciEvaluation.fraction.includes('/') ? (
-                    <div className="inline-flex flex-col items-center justify-center font-bold text-sm">
-                      <span className="border-b border-[#1D2B1A] px-1">
-                        {sciEvaluation.fraction.split('/')[0]}
-                      </span>
-                      <span className="px-1">
-                        {sciEvaluation.fraction.split('/')[1]}
-                      </span>
-                    </div>
-                  ) : (
-                    <span className="text-lg sm:text-xl font-extrabold text-[#1D2B1A]">
-                      {sciEvaluation.isValid ? sciEvaluation.formatted : 'Syntax ERROR'}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* D-Pad & Control Section */}
-            <div className="grid grid-cols-3 gap-2 items-center px-1 shrink-0">
-              <div className="flex flex-col gap-1">
-                <button
-                  type="button"
-                  onClick={() => setIsShiftActive(!isShiftActive)}
-                  className={`py-1.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                    isShiftActive ? 'bg-amber-400 text-black ring-2 ring-amber-300' : 'bg-amber-600/90 hover:bg-amber-600 text-white'
-                  }`}
-                >
-                  SHIFT
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsAlphaActive(!isAlphaActive)}
-                  className={`py-1.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                    isAlphaActive ? 'bg-rose-400 text-black ring-2 ring-rose-300' : 'bg-rose-600/90 hover:bg-rose-600 text-white'
-                  }`}
-                >
-                  ALPHA
-                </button>
-              </div>
-
-              {/* Replay 4-Way D-Pad */}
-              <div className="flex items-center justify-center">
-                <div className="relative w-20 h-20 bg-slate-800 border border-slate-700 rounded-full flex items-center justify-center shadow-lg">
-                  <span className="text-[8px] text-slate-400 font-bold tracking-tighter">REPLAY</span>
-                  <button
-                    type="button"
-                    onClick={() => handleDpadMove('up')}
-                    className="absolute top-0.5 text-slate-300 hover:text-white p-1 cursor-pointer"
-                  >
-                    <ChevronUp className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDpadMove('down')}
-                    className="absolute bottom-0.5 text-slate-300 hover:text-white p-1 cursor-pointer"
-                  >
-                    <ChevronDown className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDpadMove('left')}
-                    className="absolute left-0.5 text-slate-300 hover:text-white p-1 cursor-pointer"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDpadMove('right')}
-                    className="absolute right-0.5 text-slate-300 hover:text-white p-1 cursor-pointer"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('AC')}
-                  className="py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded text-[11px] font-bold cursor-pointer"
-                >
-                  ON / AC
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('DEL')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-[11px] font-bold cursor-pointer"
-                >
-                  DEL
-                </button>
-              </div>
-            </div>
-
-            {/* Casio FX-991ES Function Keys Matrix with Shift Amber Badges */}
-            <div className="space-y-1 font-mono text-xs shrink-0">
-              {/* Row 1: Fraction (c d/e), Sqrt (cbrt), Pow2 (cube), PowY (root), Log (10^x), Ln (e^x) */}
-              <div className="grid grid-cols-6 gap-1">
-                {/* Fraction key */}
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('FRAC')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">a/b</span>
-                  <span className="text-xs">▰/▱</span>
-                </button>
-
-                {/* Sqrt key */}
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'CBRT' : 'SQRT')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">∛</span>
-                  <span className="text-xs">{isShiftActive ? '∛' : '√'}</span>
-                </button>
-
-                {/* x^2 key */}
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'CUBE' : 'SQR')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">x³</span>
-                  <span className="text-xs">{isShiftActive ? 'x³' : 'x²'}</span>
-                </button>
-
-                {/* x^y key */}
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('POW')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">ˣ√</span>
-                  <span className="text-xs">xʸ</span>
-                </button>
-
-                {/* Log key */}
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'EXP10' : 'log(')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">10ˣ</span>
-                  <span className="text-xs">{isShiftActive ? '10ˣ' : 'log'}</span>
-                </button>
-
-                {/* Ln key */}
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'EXP_E' : 'ln(')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">eˣ</span>
-                  <span className="text-xs">{isShiftActive ? 'eˣ' : 'ln'}</span>
-                </button>
-              </div>
-
-              {/* Row 2: Trig functions (sin⁻¹, cos⁻¹, tan⁻¹), Fact (!), Sumatoria (Σ), nCr (nPr) */}
-              <div className="grid grid-cols-6 gap-1">
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'asin(' : 'sin(')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">sin⁻¹</span>
-                  <span className="text-xs">{isShiftActive ? 'sin⁻¹' : 'sin'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'acos(' : 'cos(')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">cos⁻¹</span>
-                  <span className="text-xs">{isShiftActive ? 'cos⁻¹' : 'cos'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'atan(' : 'tan(')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">tan⁻¹</span>
-                  <span className="text-xs">{isShiftActive ? 'tan⁻¹' : 'tan'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'FACT' : 'INV')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">x!</span>
-                  <span className="text-xs">{isShiftActive ? 'x!' : 'x⁻¹'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'SUM' : '(')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">Σ</span>
-                  <span className="text-xs">{isShiftActive ? 'Σ' : '('}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'nPr(' : 'nCr(')}
-                  className="py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-100 font-bold flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">nPr</span>
-                  <span className="text-xs">{isShiftActive ? 'nPr' : 'nCr'}</span>
-                </button>
-              </div>
-
-              {/* Row 3: Parenthesis, Percent %, and Main Keypad */}
-              <div className="grid grid-cols-5 gap-1 pt-1">
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('7')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  7
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('8')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  8
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('9')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  9
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('AC')}
-                  className="py-2.5 bg-rose-700 hover:bg-rose-600 text-white rounded font-bold text-xs"
-                >
-                  AC
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('DEL')}
-                  className="py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded font-bold text-xs"
-                >
-                  DEL
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('4')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  4
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('5')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  5
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('6')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  6
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('*')}
-                  className="py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold text-sm"
-                >
-                  ×
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('/')}
-                  className="py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold text-sm"
-                >
-                  ÷
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('1')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  1
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('2')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  2
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('3')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  3
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('+')}
-                  className="py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold text-sm"
-                >
-                  +
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('-')}
-                  className="py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold text-sm"
-                >
-                  -
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('0')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  0
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken('.')}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold text-sm"
-                >
-                  .
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'pi' : 'EXP10')}
-                  className="py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded font-bold text-xs flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">π</span>
-                  <span>{isShiftActive ? 'π' : '×10ˣ'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertSciToken(isShiftActive ? 'e' : 'ans')}
-                  className="py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded font-bold text-xs flex flex-col items-center justify-center"
-                >
-                  <span className="text-[8px] text-amber-400 font-bold leading-none">e</span>
-                  <span>{isShiftActive ? 'e' : 'Ans'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSciEqual}
-                  className="py-2.5 bg-amber-500 hover:bg-amber-400 text-black rounded font-extrabold text-sm shadow-md"
-                >
-                  =
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* MODAL DE CONFIRMACIÓN PARA ELIMINAR FILA EN CALCULADORA */}
       {rowToDelete && (
@@ -1741,6 +1061,12 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
         onClose={() => setIsImportModalOpen(false)}
         context="calculator"
         onImportCalcAccount={handleImportCalcAccount}
+      />
+
+      {/* MODAL DE INFORMACIÓN DE FUNCIONES EN PULSACIÓN LARGA */}
+      <FunctionInfoModal
+        info={helpInfo}
+        onClose={() => setHelpInfo(null)}
       />
     </div>
   );
