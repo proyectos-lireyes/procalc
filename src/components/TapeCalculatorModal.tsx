@@ -11,6 +11,7 @@ import {
   ChevronDown,
   Keyboard,
   Smartphone,
+  Edit2,
 } from 'lucide-react';
 import { evaluateExpression } from '../utils/mathEvaluator';
 import { formatNumber } from '../utils/currency';
@@ -23,15 +24,79 @@ interface TapeCalculatorModalProps {
   isInline?: boolean;
 }
 
-interface TapeRow {
+export interface TapeRow {
   id: string;
   description: string;
   expression: string;
 }
 
-const INITIAL_ROWS: TapeRow[] = [
-  { id: '1', description: '', expression: '' },
-];
+export interface CalculatorAccount {
+  id: string;
+  name: string;
+  rows: TapeRow[];
+  createdAt: number;
+}
+
+const STORAGE_KEY_ACCOUNTS = 'tape_calculator_accounts';
+const STORAGE_KEY_ACTIVE_ACCOUNT = 'tape_calculator_active_account_id';
+
+const computeRowsTotal = (rowsList: TapeRow[]): number => {
+  let runningAns = 0;
+  for (let idx = 0; idx < rowsList.length; idx++) {
+    const r = rowsList[idx];
+    const trimmed = r.expression.trim();
+    if (!trimmed) continue;
+    let processed = trimmed;
+    if (/^[+\-*/^%]/.test(trimmed)) {
+      processed = `ans ${trimmed}`;
+    }
+    const res = evaluateExpression(processed, { ans: runningAns, Ans: runningAns, ANS: runningAns });
+    if (res.isValid) {
+      if (/^[+\-]/.test(trimmed)) {
+        runningAns = res.value;
+      } else if (/^[*/^%]/.test(trimmed) || trimmed.toLowerCase().includes('ans')) {
+        runningAns = res.value;
+      } else {
+        runningAns = idx === 0 ? res.value : runningAns + res.value;
+      }
+    }
+  }
+  return runningAns;
+};
+
+const getInitialAccounts = (): CalculatorAccount[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_ACCOUNTS);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.error('Error loading accounts from storage', e);
+  }
+  return [
+    {
+      id: 'acc_1',
+      name: 'Cuenta 1',
+      rows: [{ id: 'row_1', description: '', expression: '' }],
+      createdAt: Date.now(),
+    },
+  ];
+};
+
+const getInitialActiveAccountId = (accs: CalculatorAccount[]): string => {
+  try {
+    const savedId = localStorage.getItem(STORAGE_KEY_ACTIVE_ACCOUNT);
+    if (savedId && accs.some((a) => a.id === savedId)) {
+      return savedId;
+    }
+  } catch (e) {
+    // fallback
+  }
+  return accs[0]?.id || 'acc_1';
+};
 
 type CalcMode = 'basic' | 'fx991es';
 type AngleUnit = 'deg' | 'rad';
@@ -43,11 +108,66 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
   isInline = false,
 }) => {
   const [calcMode, setCalcMode] = useState<CalcMode>('basic');
-  const [rows, setRows] = useState<TapeRow[]>(INITIAL_ROWS);
+  const [accounts, setAccounts] = useState<CalculatorAccount[]>(getInitialAccounts);
+  const [activeAccountId, setActiveAccountId] = useState<string>(() => getInitialActiveAccountId(accounts));
+  const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
+  const [editingAccountName, setEditingAccountName] = useState<string>('');
+  const [accountToDelete, setAccountToDelete] = useState<CalculatorAccount | null>(null);
+
+  const activeAccount = useMemo(() => {
+    return (
+      accounts.find((a) => a.id === activeAccountId) ||
+      accounts[0] || {
+        id: 'acc_1',
+        name: 'Cuenta 1',
+        rows: [{ id: 'row_1', description: '', expression: '' }],
+        createdAt: Date.now(),
+      }
+    );
+  }, [accounts, activeAccountId]);
+
+  const rows = activeAccount.rows;
+
+  // Persist accounts to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(accounts));
+    } catch (e) {
+      console.error('Error saving accounts to localStorage', e);
+    }
+  }, [accounts]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_ACTIVE_ACCOUNT, activeAccountId);
+    } catch (e) {
+      // ignore
+    }
+  }, [activeAccountId]);
+
+  // Helper to update active account rows
+  const setRows = (newRowsOrFn: TapeRow[] | ((prev: TapeRow[]) => TapeRow[])) => {
+    setAccounts((prevAccounts) => {
+      const currentAcc = prevAccounts.find((a) => a.id === activeAccount.id) || prevAccounts[0];
+      const newRows =
+        typeof newRowsOrFn === 'function' ? newRowsOrFn(currentAcc.rows) : newRowsOrFn;
+      return prevAccounts.map((a) => (a.id === currentAcc.id ? { ...a, rows: newRows } : a));
+    });
+  };
+
+  // Totals calculated for each account tab
+  const accountTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    accounts.forEach((acc) => {
+      totals[acc.id] = computeRowsTotal(acc.rows);
+    });
+    return totals;
+  }, [accounts]);
+
   const [copiedTape, setCopiedTape] = useState(false);
 
   // Active focused row in basic mode
-  const [activeRowId, setActiveRowId] = useState<string>(INITIAL_ROWS[0].id);
+  const [activeRowId, setActiveRowId] = useState<string>(rows[0]?.id || '1');
   const isNativeKeyboardOpen = useVirtualKeyboard();
 
   // Input refs for automatic focus
@@ -82,7 +202,7 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
         sciInputRef.current?.focus();
       }, 50);
     }
-  }, [isOpen, calcMode]);
+  }, [isOpen, calcMode, activeAccountId]);
 
   // BASIC MODE: Sequential evaluation of rows
   const computedTapeRows = useMemo(() => {
@@ -166,11 +286,123 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
     setRows([{ id: 'row_' + Date.now(), description: '', expression: '' }]);
   };
 
+  // Account Management Handlers
+  const handleCreateAccount = () => {
+    const newNum = accounts.length + 1;
+    const newId = 'acc_' + Date.now();
+    const newRowId = 'row_' + Date.now();
+    const newAcc: CalculatorAccount = {
+      id: newId,
+      name: `Cuenta ${newNum}`,
+      rows: [{ id: newRowId, description: '', expression: '' }],
+      createdAt: Date.now(),
+    };
+    setAccounts((prev) => [...prev, newAcc]);
+    setActiveAccountId(newId);
+    setActiveRowId(newRowId);
+    setTimeout(() => {
+      exprInputRefs.current[newRowId]?.focus();
+    }, 50);
+  };
+
+  const handleStartRenameAccount = (account: CalculatorAccount, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setEditingAccountId(account.id);
+    setEditingAccountName(account.name);
+  };
+
+  const handleSaveRenameAccount = (id: string) => {
+    const trimmed = editingAccountName.trim();
+    if (trimmed) {
+      setAccounts((prev) =>
+        prev.map((acc) => (acc.id === id ? { ...acc, name: trimmed } : acc))
+      );
+    }
+    setEditingAccountId(null);
+  };
+
+  const handleRequestDeleteAccount = (account: CalculatorAccount, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const hasData = account.rows.some((r) => r.expression.trim() || r.description.trim());
+    if (hasData) {
+      setAccountToDelete(account);
+    } else {
+      executeDeleteAccount(account.id);
+    }
+  };
+
+  const executeDeleteAccount = (idToDelete: string) => {
+    if (accounts.length <= 1) {
+      const freshRowId = 'row_' + Date.now();
+      const freshAcc: CalculatorAccount = {
+        id: 'acc_' + Date.now(),
+        name: 'Cuenta 1',
+        rows: [{ id: freshRowId, description: '', expression: '' }],
+        createdAt: Date.now(),
+      };
+      setAccounts([freshAcc]);
+      setActiveAccountId(freshAcc.id);
+      setActiveRowId(freshRowId);
+      setAccountToDelete(null);
+      return;
+    }
+
+    const remaining = accounts.filter((a) => a.id !== idToDelete);
+    setAccounts(remaining);
+    if (activeAccountId === idToDelete) {
+      const nextActive = remaining[0];
+      setActiveAccountId(nextActive.id);
+      setActiveRowId(nextActive.rows[0]?.id || '');
+    }
+    setAccountToDelete(null);
+  };
+
+  // Smart Enter navigation:
+  // If next row exists (even if empty/free), moves focus to the row below without creating an unnecessary row at the end!
+  // Only appends a new row when pressing Enter on the last row.
+  const handleTapeEnter = (fromIndex?: number) => {
+    const currentIndex =
+      fromIndex !== undefined ? fromIndex : rows.findIndex((r) => r.id === activeRowId);
+    const validIndex = currentIndex >= 0 ? currentIndex : rows.length - 1;
+
+    // If there is a row below, focus it
+    if (validIndex < rows.length - 1) {
+      const nextRow = rows[validIndex + 1];
+      setActiveRowId(nextRow.id);
+      setTimeout(() => {
+        exprInputRefs.current[nextRow.id]?.focus();
+      }, 30);
+      return;
+    }
+
+    // On the last row: append a new row
+    handleAddRow(validIndex);
+  };
+
   // Keyboard navigation for basic mode
   const handleTapeKeyDown = (e: React.KeyboardEvent, index: number) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      handleAddRow(index);
+      if (e.shiftKey) {
+        // Shift+Enter forces inserting a row right below
+        handleAddRow(index);
+      } else {
+        handleTapeEnter(index);
+      }
+    } else if (e.key === 'ArrowDown') {
+      if (index < rows.length - 1) {
+        e.preventDefault();
+        const nextId = rows[index + 1].id;
+        setActiveRowId(nextId);
+        exprInputRefs.current[nextId]?.focus();
+      }
+    } else if (e.key === 'ArrowUp') {
+      if (index > 0) {
+        e.preventDefault();
+        const prevId = rows[index - 1].id;
+        setActiveRowId(prevId);
+        exprInputRefs.current[prevId]?.focus();
+      }
     }
   };
 
@@ -223,7 +455,7 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
 
   // Copy full account breakdown (basic mode)
   const handleShareFullAccount = () => {
-    let text = `📝 *CALCULADORA DE CUENTA*\n`;
+    let text = `📝 *CALCULADORA DE CUENTA: ${activeAccount.name.toUpperCase()}*\n`;
     text += `───────────────────────────\n`;
     computedTapeRows.forEach((r, idx) => {
       const desc = r.description.trim() ? ` [${r.description.trim()}]` : '';
@@ -535,6 +767,104 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
       {/* MODE 1: BASIC LINE CALCULATOR (Full screen Excel-like with automatic focus on Monto) */}
       {calcMode === 'basic' && (
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full max-w-4xl mx-auto h-full">
+          {/* CUENTAS TABS BAR */}
+          <div className="bg-slate-100/90 border-b border-slate-200 px-2 sm:px-3 py-1.5 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
+            <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mr-1 shrink-0 flex items-center gap-1">
+              Cuentas:
+            </span>
+            {accounts.map((acc) => {
+              const isActive = acc.id === activeAccount.id;
+              const isEditing = editingAccountId === acc.id;
+              const total = accountTotals[acc.id] || 0;
+
+              return (
+                <div
+                  key={acc.id}
+                  onClick={() => {
+                    if (!isActive) {
+                      setActiveAccountId(acc.id);
+                      const targetId = acc.rows[acc.rows.length - 1]?.id || acc.rows[0]?.id;
+                      if (targetId) {
+                        setActiveRowId(targetId);
+                        setTimeout(() => exprInputRefs.current[targetId]?.focus(), 40);
+                      }
+                    }
+                  }}
+                  onDoubleClick={(e) => handleStartRenameAccount(acc, e)}
+                  className={`group flex items-center gap-1.5 py-1 px-2.5 rounded-lg text-xs font-semibold cursor-pointer transition-all border shrink-0 ${
+                    isActive
+                      ? 'bg-white text-indigo-900 border-indigo-200 shadow-2xs ring-1 ring-indigo-500/20'
+                      : 'bg-slate-200/70 hover:bg-slate-200 text-slate-700 border-transparent'
+                  }`}
+                >
+                  {isEditing ? (
+                    <input
+                      type="text"
+                      autoFocus
+                      value={editingAccountName}
+                      onChange={(e) => setEditingAccountName(e.target.value)}
+                      onBlur={() => handleSaveRenameAccount(acc.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveRenameAccount(acc.id);
+                        if (e.key === 'Escape') setEditingAccountId(null);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-24 bg-white border border-indigo-400 rounded px-1 py-0.5 text-xs font-bold text-slate-900 outline-none"
+                    />
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate max-w-[120px] font-bold">{acc.name}</span>
+                      <span
+                        className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ${
+                          isActive
+                            ? 'bg-indigo-100 text-indigo-800 font-bold'
+                            : 'bg-slate-300/70 text-slate-600'
+                        }`}
+                      >
+                        ${formatNumber(total, 2)}
+                      </span>
+                    </div>
+                  )}
+
+                  {!isEditing && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleStartRenameAccount(acc, e)}
+                      className="opacity-60 hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-0.5 hover:text-indigo-600 rounded transition-opacity cursor-pointer"
+                      title="Renombrar cuenta"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={(e) => handleRequestDeleteAccount(acc, e)}
+                    className={`p-0.5 rounded transition-colors cursor-pointer ${
+                      isActive
+                        ? 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                        : 'text-slate-400 hover:text-slate-700 hover:bg-slate-300'
+                    }`}
+                    title="Cerrar / Eliminar cuenta"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              );
+            })}
+
+            {/* Nueva Cuenta Button */}
+            <button
+              type="button"
+              onClick={handleCreateAccount}
+              className="flex items-center gap-1 py-1 px-2.5 rounded-lg text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 transition-all cursor-pointer shrink-0 shadow-2xs active:scale-95"
+              title="Crear nueva cuenta"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Nueva cuenta</span>
+            </button>
+          </div>
+
           {/* Scrollable Rows Table */}
           <div className="p-2 sm:p-3 overflow-y-auto flex-1 min-h-0 bg-slate-50/50">
             <table className="w-full text-left border-collapse">
@@ -544,7 +874,7 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                   <th className="py-1.5 px-2">Descripción (opcional)</th>
                   <th className="w-48 sm:w-64 py-1.5 px-2">Monto / Operación</th>
                   <th className="w-28 sm:w-36 py-1.5 px-2 text-right">Subtotal</th>
-                  <th className="w-8 py-1.5 text-center"></th>
+                  <th className="w-14 sm:w-16 py-1.5 text-center"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -617,24 +947,37 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                         )}
                       </td>
 
-                      {/* DELETE ROW */}
-                      <td className="py-1.5 text-center">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setRowToDelete({
-                              id: row.id,
-                              lineNum: row.lineNum,
-                              description: row.description,
-                              expression: row.expression,
-                            });
-                          }}
-                          className="text-slate-300 hover:text-rose-600 p-1 rounded transition-colors cursor-pointer"
-                          title="Eliminar fila"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                      {/* ACTIONS: INSERT ROW BELOW / DELETE ROW */}
+                      <td className="py-1.5 px-1 text-center whitespace-nowrap">
+                        <div className="flex items-center justify-center gap-0.5">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleAddRow(idx);
+                            }}
+                            className="text-slate-300 hover:text-indigo-600 p-1 rounded transition-colors cursor-pointer"
+                            title="Insertar fila debajo (+)"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRowToDelete({
+                                id: row.id,
+                                lineNum: row.lineNum,
+                                description: row.description,
+                                expression: row.expression,
+                              });
+                            }}
+                            className="text-slate-300 hover:text-rose-600 p-1 rounded transition-colors cursor-pointer"
+                            title="Eliminar fila"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -806,9 +1149,9 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleAddRow()}
+                  onClick={() => handleTapeEnter()}
                   className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-700 hover:bg-indigo-600 text-white shadow-xs flex items-center justify-center gap-1 active:scale-95"
-                  title="Nueva Fila (Enter)"
+                  title="Siguiente fila / Nueva fila (Enter)"
                 >
                   ↵ Enter
                 </button>
@@ -1280,6 +1623,44 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                 className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer transition-colors shadow-2xs"
               >
                 Sí, eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMACIÓN PARA CERRAR/ELIMINAR CUENTA */}
+      {accountToDelete && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-fade-in">
+          <div className="bg-white text-slate-900 rounded-xl shadow-2xl border border-slate-200 max-w-xs w-full p-4 flex flex-col gap-3 animate-scale-up">
+            <div className="flex items-center gap-2.5 text-rose-600">
+              <span className="p-2 rounded-lg bg-rose-100 shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </span>
+              <div>
+                <h4 className="font-bold text-sm text-slate-900">¿Cerrar "{accountToDelete.name}"?</h4>
+                <p className="text-[11px] text-slate-500">
+                  Total acumulado: ${formatNumber(accountTotals[accountToDelete.id] || 0, 2)}
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-600">
+              Esta cuenta contiene datos. ¿Deseas cerrarla y eliminar sus filas de la memoria?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setAccountToDelete(null)}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 text-xs font-bold cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => executeDeleteAccount(accountToDelete.id)}
+                className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer transition-colors shadow-2xs"
+              >
+                Sí, cerrar cuenta
               </button>
             </div>
           </div>
