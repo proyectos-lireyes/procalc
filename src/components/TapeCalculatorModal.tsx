@@ -13,6 +13,10 @@ import {
   Smartphone,
   Edit2,
   Download,
+  Eye,
+  EyeOff,
+  Tag,
+  Clock,
 } from 'lucide-react';
 import { evaluateExpression } from '../utils/mathEvaluator';
 import { formatNumber } from '../utils/currency';
@@ -21,6 +25,8 @@ import { useLongPress } from '../utils/useLongPress';
 import { encodeCalcAccountShare, CalcSharePayload } from '../utils/shareImporter';
 import { ImportSharedModal } from './ImportSharedModal';
 import { FunctionInfoModal, FunctionHelpInfo } from './FunctionInfoModal';
+import { ShareTapeAccountModal } from './ShareTapeAccountModal';
+import { BasicVariablesModal, BasicVariable } from './BasicVariablesModal';
 
 interface TapeCalculatorModalProps {
   isOpen: boolean;
@@ -103,6 +109,98 @@ const getInitialActiveAccountId = (accs: CalculatorAccount[]): string => {
   return accs[0]?.id || 'acc_1';
 };
 
+interface TapeKeyButtonProps {
+  label: React.ReactNode;
+  onClick: () => void;
+  onLongPress?: () => void;
+  assignedVariable?: string;
+  className?: string;
+  title?: string;
+}
+
+const TapeKeyButton: React.FC<TapeKeyButtonProps> = ({
+  label,
+  onClick,
+  onLongPress,
+  assignedVariable,
+  className = '',
+  title,
+}) => {
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const isLongPressRef = useRef<boolean>(false);
+  const [isPressing, setIsPressing] = useState<boolean>(false);
+
+  const startPress = () => {
+    if (!onLongPress) return;
+    isLongPressRef.current = false;
+    setIsPressing(true);
+    timerRef.current = setTimeout(() => {
+      isLongPressRef.current = true;
+      setIsPressing(false);
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try {
+          navigator.vibrate(40);
+        } catch {
+          // ignore
+        }
+      }
+      onLongPress();
+    }, 400);
+  };
+
+  const endPress = () => {
+    setIsPressing(false);
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  const handleClick = () => {
+    if (isLongPressRef.current) {
+      isLongPressRef.current = false;
+      return;
+    }
+    onClick();
+  };
+
+  return (
+    <button
+      type="button"
+      onPointerDown={startPress}
+      onPointerUp={endPress}
+      onPointerLeave={endPress}
+      onPointerCancel={endPress}
+      onContextMenu={(e) => {
+        if (onLongPress) e.preventDefault();
+      }}
+      onClick={handleClick}
+      className={`relative h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center select-none touch-manipulation overflow-visible ${className}`}
+      title={title}
+    >
+      {/* Visual floating badge while holding */}
+      {isPressing && assignedVariable && (
+        <div className="absolute -top-7 left-1/2 -translate-x-1/2 z-40 bg-indigo-900 text-white text-[10px] font-mono font-bold px-2 py-0.5 rounded-md shadow-lg whitespace-nowrap animate-bounce pointer-events-none border border-indigo-400 flex items-center gap-1">
+          <span>{assignedVariable}</span>
+        </div>
+      )}
+
+      {/* Persistent corner badge showing which variable is assigned */}
+      {assignedVariable && (
+        <span className="absolute top-0.5 right-1 px-1 py-0.2 rounded bg-indigo-100 text-indigo-900 font-mono font-black text-[8px] sm:text-[9px] border border-indigo-200 pointer-events-none leading-none tracking-tight">
+          {assignedVariable}
+        </span>
+      )}
+
+      {/* Visual progress pulse while holding */}
+      {isPressing && (
+        <span className="absolute bottom-0 left-0 right-0 h-1 bg-indigo-500 rounded-b-lg animate-[pulse_0.35s_ease-in-out_infinite]" />
+      )}
+      {label}
+    </button>
+  );
+};
+
 export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
   isOpen,
   onClose,
@@ -168,6 +266,72 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
 
   const [copiedTape, setCopiedTape] = useState(false);
 
+  // Show / Hide Description Column State
+  const [showDescriptionColumn, setShowDescriptionColumn] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('tape_show_description');
+      return saved !== null ? JSON.parse(saved) : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleShowDescription = () => {
+    setShowDescriptionColumn((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('tape_show_description', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  // Basic Variables State & Modal
+  const [basicVariables, setBasicVariables] = useState<BasicVariable[]>(() => {
+    try {
+      const saved = localStorage.getItem('tape_basic_variables');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return [
+      { id: 'var_iva', name: 'IVA', valueExpression: '1.16', keyShortcut: '%', description: 'IVA 16%' },
+    ];
+  });
+
+  const handleSaveBasicVariables = (vars: BasicVariable[]) => {
+    setBasicVariables(vars);
+    try {
+      localStorage.setItem('tape_basic_variables', JSON.stringify(vars));
+    } catch {
+      // ignore
+    }
+  };
+
+  // Modals state
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [isVariablesModalOpen, setIsVariablesModalOpen] = useState(false);
+
+  // Variables map for expression evaluation
+  const basicVarsMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    basicVariables.forEach((v) => {
+      let valStr = v.valueExpression.trim();
+      if (valStr.endsWith('%')) {
+        const num = parseFloat(valStr.slice(0, -1));
+        map[v.name] = isNaN(num) ? 0 : num / 100;
+        map[v.name.toLowerCase()] = isNaN(num) ? 0 : num / 100;
+      } else {
+        const num = parseFloat(valStr);
+        map[v.name] = isNaN(num) ? 0 : num;
+        map[v.name.toLowerCase()] = isNaN(num) ? 0 : num;
+      }
+    });
+    return map;
+  }, [basicVariables]);
+
   // Active focused row in basic mode
   const [activeRowId, setActiveRowId] = useState<string>(rows[0]?.id || '1');
   const isNativeKeyboardOpen = useVirtualKeyboard();
@@ -213,7 +377,12 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
         processed = `ans ${trimmed}`;
       }
 
-      const res = evaluateExpression(processed, { ans: runningAns, Ans: runningAns, ANS: runningAns });
+      const res = evaluateExpression(processed, {
+        ...basicVarsMap,
+        ans: runningAns,
+        Ans: runningAns,
+        ANS: runningAns,
+      });
       const isValid = res.isValid;
       const evaluatedValue = isValid ? res.value : 0;
 
@@ -242,7 +411,7 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
         error: res.error,
       };
     });
-  }, [rows]);
+  }, [rows, basicVarsMap]);
 
   const grandTotal = computedTapeRows.length > 0 ? computedTapeRows[computedTapeRows.length - 1].subtotal : 0;
 
@@ -489,27 +658,10 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
   };
 
   // Copy full account breakdown (basic mode)
-  const handleShareFullAccount = () => {
-    let text = `📝 *CALCULADORA DE CUENTA: ${activeAccount.name.toUpperCase()}*\n`;
-    text += `───────────────────────────\n`;
-    computedTapeRows.forEach((r, idx) => {
-      const desc = r.description.trim() ? ` [${r.description.trim()}]` : '';
-      const expr = r.expression.trim() || '0';
-      const sub = r.isMathOp ? ` = ${formatNumber(r.evaluatedValue, 2)}` : '';
-      text += `${idx + 1}. ${expr}${desc}${sub}\n`;
-    });
-    text += `───────────────────────────\n`;
-    text += `💰 *TOTAL ACUMULADO:* ${formatNumber(grandTotal, 2)}\n\n`;
-
+  const formattedShareText = useMemo(() => {
     const code = encodeCalcAccountShare(activeAccount.name, activeAccount.rows);
-    text += `📲 *PARA ABRIR E IMPORTAR EN LA APP:*\n`;
-    text += `Copia todo este mensaje y en la app pulsa en «📥 Importar»:\n`;
-    text += `${code}\n`;
-
-    navigator.clipboard.writeText(text);
-    setCopiedTape(true);
-    setTimeout(() => setCopiedTape(false), 2000);
-  };
+    return code;
+  }, [activeAccount]);
 
   const [helpInfo, setHelpInfo] = useState<FunctionHelpInfo | null>(null);
 
@@ -520,14 +672,14 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
         badge: 'Calcu Básica',
         icon: <Share2 className="w-5 h-5 text-indigo-600" />,
         description:
-          'Genera y copia al portapapeles el desglose detallado de todos los conceptos, operaciones y el total acumulado de esta cuenta. Además, adjunta un código especial para que otra persona pueda importarla directamente en su aplicación.',
+          'Abre el panel para compartir la cuenta actual como imagen o texto formateado. Permite copiar la imagen del comprobante al portapapeles o enviarla por WhatsApp.',
         tips: [
-          'Listo para enviar por WhatsApp, Telegram o notas',
-          'La otra persona solo debe copiar tu mensaje y pulsar "Importar"',
+          'Opción de Comprobante en Imagen con totales',
+          'Opción de Texto con código de importación',
         ],
       });
     },
-    onClick: handleShareFullAccount,
+    onClick: () => setIsShareModalOpen(true),
   });
 
   const importLongPress = useLongPress({
@@ -545,6 +697,40 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
       });
     },
     onClick: () => setIsImportModalOpen(true),
+  });
+
+  const mostrarLongPress = useLongPress({
+    onLongPress: () => {
+      setHelpInfo({
+        title: 'Mostrar / Ocultar Descripción',
+        badge: 'Visualización',
+        icon: <Eye className="w-5 h-5 text-blue-600" />,
+        description:
+          'Muestra u oculta la columna opcional de descripción para darle el máximo ancho posible a los montos y operaciones numéricas en pantalla.',
+        tips: [
+          'Oculta la descripción en celulares para escribir montos más cómodamente',
+          'Pulsa de nuevo para volver a mostrar las descripciones',
+        ],
+      });
+    },
+    onClick: toggleShowDescription,
+  });
+
+  const varLongPress = useLongPress({
+    onLongPress: () => {
+      setHelpInfo({
+        title: 'Variables (VAR)',
+        badge: 'Personalización',
+        icon: <Tag className="w-5 h-5 text-indigo-600" />,
+        description:
+          'Permite crear variables personalizadas (como IVA, DOLAR, PROPINA) y asignarlas a la pulsación larga de teclas del teclado básico.',
+        tips: [
+          'Mantén presionada la tecla asignada para insertar su valor al instante',
+          'Úsalas en fórmulas como 100 * IVA o 50 * DOLAR',
+        ],
+      });
+    },
+    onClick: () => setIsVariablesModalOpen(true),
   });
 
   if (!isOpen) return null;
@@ -675,8 +861,10 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
               <thead>
                 <tr className="text-[11px] uppercase font-bold text-slate-500 border-b border-slate-200">
                   <th className="w-8 py-1.5 px-1 text-center">#</th>
-                  <th className="py-1.5 px-2">Descripción (opcional)</th>
-                  <th className="w-48 sm:w-64 py-1.5 px-2">Monto / Operación</th>
+                  {showDescriptionColumn && (
+                    <th className="py-1.5 px-2">Descripción (opcional)</th>
+                  )}
+                  <th className="py-1.5 px-2 flex-1">Monto / Operación</th>
                   <th className="w-28 sm:w-36 py-1.5 px-2 text-right">Subtotal</th>
                   <th className="w-14 sm:w-16 py-1.5 text-center"></th>
                 </tr>
@@ -697,24 +885,26 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
                         {row.lineNum}
                       </td>
 
-                      {/* DESCRIPCIÓN */}
-                      <td className="py-1.5 px-2">
-                        <input
-                          type="text"
-                          inputMode="text"
-                          value={row.description}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setRows(
-                              rows.map((r) => (r.id === row.id ? { ...r, description: val } : r))
-                            );
-                          }}
-                          onFocus={() => setActiveRowId(row.id)}
-                          onKeyDown={(e) => handleTapeKeyDown(e, idx)}
-                          placeholder="Descripción"
-                          className="w-full bg-transparent px-2 py-1 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-1 focus:ring-indigo-500 rounded font-medium"
-                        />
-                      </td>
+                      {/* DESCRIPCIÓN (Opcional) */}
+                      {showDescriptionColumn && (
+                        <td className="py-1.5 px-2">
+                          <input
+                            type="text"
+                            inputMode="text"
+                            value={row.description}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setRows(
+                                rows.map((r) => (r.id === row.id ? { ...r, description: val } : r))
+                              );
+                            }}
+                            onFocus={() => setActiveRowId(row.id)}
+                            onKeyDown={(e) => handleTapeKeyDown(e, idx)}
+                            placeholder="Descripción"
+                            className="w-full bg-transparent px-2 py-1 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-1 focus:ring-indigo-500 rounded font-medium"
+                          />
+                        </td>
+                      )}
 
                       {/* MONTO / OPERACIÓN */}
                       <td className="py-1.5 px-2">
@@ -790,17 +980,17 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
             </table>
           </div>
 
-          {/* Basic Calculator Summary Bar (Compartir cuenta, Importar y Total en la misma línea) */}
-          <div className="bg-white px-2 sm:px-3 py-1.5 border-t border-b border-slate-200 flex items-center justify-between gap-1.5 sm:gap-2 shrink-0 flex-nowrap overflow-x-auto scrollbar-none">
+          {/* Basic Calculator Summary Bar (Compartir cuenta, Importar, Mostrar, VAR y Total en la misma línea) */}
+          <div className="bg-white px-2 sm:px-3 py-1.5 border-t border-b border-slate-200 flex items-center justify-between gap-1 sm:gap-1.5 shrink-0 flex-nowrap overflow-x-auto scrollbar-none">
             <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
               <button
                 type="button"
                 {...shareLongPress.handlers}
                 className="px-2.5 sm:px-3 py-1 sm:py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs active:scale-95 whitespace-nowrap"
-                title="Compartir cuenta (Mantén presionado para ver qué hace)"
+                title="Compartir cuenta en Imagen o Texto (Mantén presionado para ver qué hace)"
               >
                 <Share2 className="w-3.5 h-3.5 shrink-0 text-slate-600" />
-                <span>{copiedTape ? '¡Copiado!' : 'Compartir cuenta'}</span>
+                <span>Compartir</span>
               </button>
 
               <button
@@ -811,6 +1001,36 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
               >
                 <Download className="w-3.5 h-3.5 shrink-0 text-indigo-600" />
                 <span>Importar</span>
+              </button>
+
+              {/* Botón Mostrar u ocultar columna Descripción */}
+              <button
+                type="button"
+                {...mostrarLongPress.handlers}
+                className={`px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs active:scale-95 whitespace-nowrap border ${
+                  showDescriptionColumn
+                    ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+                    : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                }`}
+                title="Mostrar u ocultar columna Descripción (Mantén presionado para ver qué hace)"
+              >
+                {showDescriptionColumn ? (
+                  <Eye className="w-3.5 h-3.5 shrink-0" />
+                ) : (
+                  <EyeOff className="w-3.5 h-3.5 shrink-0" />
+                )}
+                <span>Mostrar</span>
+              </button>
+
+              {/* Botón VAR para variables */}
+              <button
+                type="button"
+                {...varLongPress.handlers}
+                className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer border border-indigo-200 shadow-2xs active:scale-95 whitespace-nowrap"
+                title="Crear y asignar variables a teclas (Mantén presionado para ver qué hace)"
+              >
+                <Tag className="w-3.5 h-3.5 shrink-0 text-indigo-600" />
+                <span>VAR</span>
               </button>
             </div>
 
@@ -824,153 +1044,216 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
 
           {/* Basic Keypad with DEL, AC, Clear All and cursor-position insertion */}
           {!isNativeKeyboardOpen && (
-            <div className="p-2 sm:p-3 bg-slate-100 border-t border-slate-200 shrink-0">
+            <div className="p-2 sm:p-3 bg-slate-100 border-t border-slate-200 shrink-0 select-none">
               <div className="grid grid-cols-5 gap-1.5 sm:gap-2 max-w-2xl mx-auto">
                 {/* Row 1: (, ), %, AC, DEL */}
-                <button
-                  type="button"
+                <TapeKeyButton
+                  label="("
                   onClick={() => handleInsertBasicToken('(')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-                >
-                  (
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertBasicToken(')')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-                >
-                  )
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertBasicToken('%')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 shadow-2xs active:scale-95 flex items-center justify-center"
-                >
-                  %
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertBasicToken('AC')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-200 hover:bg-rose-300 text-rose-900 active:scale-95 flex items-center justify-center"
-                >
-                  AC
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertBasicToken('DEL')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-rose-100 hover:bg-rose-200 text-rose-800 active:scale-95 flex items-center justify-center"
-                >
-                  DEL
-                </button>
+                  assignedVariable={basicVariables.find((v) => v.keyShortcut === '(')?.name}
+                  onLongPress={
+                    basicVariables.find((v) => v.keyShortcut === '(')
+                      ? () => handleInsertBasicToken(basicVariables.find((v) => v.keyShortcut === '(')!.name)
+                      : undefined
+                  }
+                  className="bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                  title="Paréntesis abrir ("
+                />
 
-                {/* Row 2: 7, 8, 9, /, * */}
-                {['7', '8', '9', '/', '*'].map((btn) => (
-                  <button
-                    key={btn}
-                    type="button"
-                    onClick={() => handleInsertBasicToken(btn)}
-                    className={`h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
-                      btn === '/' || btn === '*'
-                        ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
-                        : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
-                    }`}
-                  >
-                    {btn === '/' ? '÷' : btn === '*' ? '×' : btn}
-                  </button>
-                ))}
+                <TapeKeyButton
+                  label=")"
+                  onClick={() => handleInsertBasicToken(')')}
+                  assignedVariable={basicVariables.find((v) => v.keyShortcut === ')')?.name}
+                  onLongPress={
+                    basicVariables.find((v) => v.keyShortcut === ')')
+                      ? () => handleInsertBasicToken(basicVariables.find((v) => v.keyShortcut === ')')!.name)
+                      : undefined
+                  }
+                  className="bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                  title="Paréntesis cerrar )"
+                />
+
+                <TapeKeyButton
+                  label="%"
+                  onClick={() => handleInsertBasicToken('%')}
+                  assignedVariable={basicVariables.find((v) => v.keyShortcut === '%')?.name}
+                  onLongPress={
+                    basicVariables.find((v) => v.keyShortcut === '%')
+                      ? () => handleInsertBasicToken(basicVariables.find((v) => v.keyShortcut === '%')!.name)
+                      : undefined
+                  }
+                  className="bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 shadow-2xs"
+                  title="Porcentaje %"
+                />
+
+                <TapeKeyButton
+                  label="AC"
+                  onClick={() => handleInsertBasicToken('AC')}
+                  className="bg-rose-200 hover:bg-rose-300 text-rose-900 font-bold"
+                  title="Borrar entrada actual (AC)"
+                />
+
+                <TapeKeyButton
+                  label="DEL"
+                  onClick={() => handleInsertBasicToken('DEL')}
+                  className="bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold"
+                  title="Borrar carácter (DEL)"
+                />
+
+                {/* Row 2: 7, 8, 9, ÷, × */}
+                {['7', '8', '9', '/', '*'].map((btn) => {
+                  const assigned = basicVariables.find((v) => v.keyShortcut === btn);
+                  const isOp = btn === '/' || btn === '*';
+                  return (
+                    <TapeKeyButton
+                      key={btn}
+                      label={btn === '/' ? '÷' : btn === '*' ? '×' : btn}
+                      onClick={() => handleInsertBasicToken(btn)}
+                      assignedVariable={assigned?.name}
+                      onLongPress={
+                        assigned
+                          ? () => handleInsertBasicToken(assigned.name)
+                          : undefined
+                      }
+                      className={
+                        isOp
+                          ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl border border-indigo-200'
+                          : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs text-base sm:text-lg'
+                      }
+                      title={assigned ? `Tecla ${btn} (Mantén pulsada para escribir ${assigned.name})` : `Tecla ${btn}`}
+                    />
+                  );
+                })}
 
                 {/* Row 3: 4, 5, 6, -, + */}
-                {['4', '5', '6', '-', '+'].map((btn) => (
-                  <button
-                    key={btn}
-                    type="button"
-                    onClick={() => handleInsertBasicToken(btn)}
-                    className={`h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono active:scale-95 flex items-center justify-center ${
-                      btn === '-' || btn === '+'
-                        ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl'
-                        : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs'
-                    }`}
-                  >
-                    {btn}
-                  </button>
-                ))}
+                {['4', '5', '6', '-', '+'].map((btn) => {
+                  const assigned = basicVariables.find((v) => v.keyShortcut === btn);
+                  const isOp = btn === '-' || btn === '+';
+                  return (
+                    <TapeKeyButton
+                      key={btn}
+                      label={btn}
+                      onClick={() => handleInsertBasicToken(btn)}
+                      assignedVariable={assigned?.name}
+                      onLongPress={
+                        assigned
+                          ? () => handleInsertBasicToken(assigned.name)
+                          : undefined
+                      }
+                      className={
+                        isOp
+                          ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-lg sm:text-xl border border-indigo-200'
+                          : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs text-base sm:text-lg'
+                      }
+                      title={assigned ? `Tecla ${btn} (Mantén pulsada para escribir ${assigned.name})` : `Tecla ${btn}`}
+                    />
+                  );
+                })}
 
                 {/* Row 4: 1, 2, 3, Ans, Limpiar Todo */}
-                <button
-                  type="button"
-                  onClick={() => handleInsertBasicToken('1')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-                >
-                  1
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertBasicToken('2')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-                >
-                  2
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertBasicToken('3')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-                >
-                  3
-                </button>
-                <button
-                  type="button"
+                {['1', '2', '3'].map((btn) => {
+                  const assigned = basicVariables.find((v) => v.keyShortcut === btn);
+                  return (
+                    <TapeKeyButton
+                      key={btn}
+                      label={btn}
+                      onClick={() => handleInsertBasicToken(btn)}
+                      assignedVariable={assigned?.name}
+                      onLongPress={
+                        assigned
+                          ? () => handleInsertBasicToken(assigned.name)
+                          : undefined
+                      }
+                      className="bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs text-base sm:text-lg"
+                      title={assigned ? `Tecla ${btn} (Mantén pulsada para escribir ${assigned.name})` : `Tecla ${btn}`}
+                    />
+                  );
+                })}
+
+                <TapeKeyButton
+                  label="Ans"
                   onClick={() => handleInsertBasicToken('ans')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-100 hover:bg-indigo-200 text-indigo-900 active:scale-95 flex items-center justify-center"
-                >
-                  Ans
-                </button>
-                <button
-                  type="button"
+                  assignedVariable={basicVariables.find((v) => v.keyShortcut === 'Ans')?.name}
+                  onLongPress={
+                    basicVariables.find((v) => v.keyShortcut === 'Ans')
+                      ? () => handleInsertBasicToken(basicVariables.find((v) => v.keyShortcut === 'Ans')!.name)
+                      : undefined
+                  }
+                  className="bg-indigo-100 hover:bg-indigo-200 text-indigo-900 text-xs sm:text-sm font-bold border border-indigo-200"
+                  title="Último resultado Ans"
+                />
+
+                <TapeKeyButton
+                  label={
+                    <div className="flex items-center gap-1">
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Limpiar</span>
+                    </div>
+                  }
                   onClick={handleClearAllTape}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs font-bold transition-all cursor-pointer font-sans bg-rose-100 hover:bg-rose-200 text-rose-800 shadow-2xs flex items-center justify-center gap-1 active:scale-95"
+                  className="bg-rose-100 hover:bg-rose-200 text-rose-800 text-xs font-sans font-bold shadow-2xs"
                   title="Limpiar todas las filas de la cuenta"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Limpiar</span>
-                </button>
+                />
 
                 {/* Row 5: 00, 0, ., +, ↵ Enter */}
-                <button
-                  type="button"
+                <TapeKeyButton
+                  label="00"
                   onClick={() => handleInsertBasicToken('00')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-sm sm:text-base font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-                >
-                  00
-                </button>
-                <button
-                  type="button"
+                  assignedVariable={basicVariables.find((v) => v.keyShortcut === '00')?.name}
+                  onLongPress={
+                    basicVariables.find((v) => v.keyShortcut === '00')
+                      ? () => handleInsertBasicToken(basicVariables.find((v) => v.keyShortcut === '00')!.name)
+                      : undefined
+                  }
+                  className="bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs"
+                  title="Doble cero 00"
+                />
+
+                <TapeKeyButton
+                  label="0"
                   onClick={() => handleInsertBasicToken('0')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-                >
-                  0
-                </button>
-                <button
-                  type="button"
+                  assignedVariable={basicVariables.find((v) => v.keyShortcut === '0')?.name}
+                  onLongPress={
+                    basicVariables.find((v) => v.keyShortcut === '0')
+                      ? () => handleInsertBasicToken(basicVariables.find((v) => v.keyShortcut === '0')!.name)
+                      : undefined
+                  }
+                  className="bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs text-base sm:text-lg"
+                  title="Cero 0"
+                />
+
+                <TapeKeyButton
+                  label="."
                   onClick={() => handleInsertBasicToken('.')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-base sm:text-lg font-bold transition-all cursor-pointer font-mono bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs active:scale-95 flex items-center justify-center"
-                >
-                  .
-                </button>
-                <button
-                  type="button"
+                  assignedVariable={basicVariables.find((v) => v.keyShortcut === '.')?.name}
+                  onLongPress={
+                    basicVariables.find((v) => v.keyShortcut === '.')
+                      ? () => handleInsertBasicToken(basicVariables.find((v) => v.keyShortcut === '.')!.name)
+                      : undefined
+                  }
+                  className="bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-2xs text-base sm:text-lg"
+                  title="Punto decimal ."
+                />
+
+                <TapeKeyButton
+                  label="+"
                   onClick={() => handleInsertBasicToken('+')}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-lg sm:text-xl font-bold transition-all cursor-pointer font-mono bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 active:scale-95 flex items-center justify-center"
-                >
-                  +
-                </button>
-                <button
-                  type="button"
+                  assignedVariable={basicVariables.find((v) => v.keyShortcut === '+')?.name}
+                  onLongPress={
+                    basicVariables.find((v) => v.keyShortcut === '+')
+                      ? () => handleInsertBasicToken(basicVariables.find((v) => v.keyShortcut === '+')!.name)
+                      : undefined
+                  }
+                  className="bg-indigo-50 hover:bg-indigo-100 text-indigo-900 text-lg sm:text-xl font-bold border border-indigo-200"
+                  title="Suma +"
+                />
+
+                <TapeKeyButton
+                  label="↵ Enter"
                   onClick={() => handleTapeEnter()}
-                  className="h-12 sm:h-14 min-h-[48px] sm:min-h-[56px] rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer font-mono bg-indigo-700 hover:bg-indigo-600 text-white shadow-xs flex items-center justify-center gap-1 active:scale-95"
+                  className="bg-indigo-700 hover:bg-indigo-600 text-white text-xs sm:text-sm font-bold shadow-xs"
                   title="Siguiente fila / Nueva fila (Enter)"
-                >
-                  ↵ Enter
-                </button>
+                />
               </div>
             </div>
           )}
@@ -1054,6 +1337,25 @@ export const TapeCalculatorModal: React.FC<TapeCalculatorModalProps> = ({
           </div>
         </div>
       )}
+
+      {/* MODAL DE COMPARTIR CUENTA EN IMAGEN O TEXTO */}
+      <ShareTapeAccountModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        accountName={activeAccount.name}
+        rows={computedTapeRows}
+        grandTotal={grandTotal}
+        shareCode={formattedShareText}
+      />
+
+      {/* MODAL DE VARIABLES DE LA CALCULADORA BÁSICA */}
+      <BasicVariablesModal
+        isOpen={isVariablesModalOpen}
+        onClose={() => setIsVariablesModalOpen(false)}
+        variables={basicVariables}
+        onSaveVariables={handleSaveBasicVariables}
+        onInsertVariable={(varName) => handleInsertBasicToken(varName)}
+      />
 
       {/* MODAL DE IMPORTAR INFORMACIÓN COMPARTIDA */}
       <ImportSharedModal

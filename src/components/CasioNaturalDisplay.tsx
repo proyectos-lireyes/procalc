@@ -16,6 +16,8 @@ interface CasioNaturalDisplayProps {
   hasHistory: boolean;
   onToggleAngleUnit?: () => void;
   onOpenHistory?: () => void;
+  variables?: Record<string, number>;
+  onOpenVariablesModal?: () => void;
   // Result
   evaluatedValue: number | null;
   errorMessage?: string;
@@ -34,6 +36,8 @@ export const CasioNaturalDisplay: React.FC<CasioNaturalDisplayProps> = ({
   hasHistory,
   onToggleAngleUnit,
   onOpenHistory,
+  variables = {},
+  onOpenVariablesModal,
   evaluatedValue,
   errorMessage,
   resultFormat,
@@ -404,7 +408,7 @@ export const CasioNaturalDisplay: React.FC<CasioNaturalDisplayProps> = ({
           </button>
 
           {/* Natural Math Indicator */}
-          <span className="text-[10px] font-bold text-slate-400">
+          <span className="text-[10px] font-bold text-slate-400 hidden sm:inline">
             Escritura Natural
           </span>
         </div>

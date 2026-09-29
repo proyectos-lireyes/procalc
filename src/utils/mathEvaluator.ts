@@ -244,7 +244,30 @@ function tokenize(input: string): Token[] {
     throw new Error(`Carácter no reconocido: "${ch}"`);
   }
 
-  return tokens;
+  // Insert implicit multiplication between adjacent tokens:
+  // e.g. 2X -> 2 * X, (2)(3) -> (2) * (3), 5(4) -> 5 * (4), 100IVA -> 100 * IVA
+  const withImplicit: Token[] = [];
+  for (let idx = 0; idx < tokens.length; idx++) {
+    const curr = tokens[idx];
+    const next = tokens[idx + 1];
+    withImplicit.push(curr);
+    if (!next) continue;
+
+    const isCurrVal =
+      curr.type === 'NUMBER' ||
+      curr.type === 'RPAREN' ||
+      (curr.type === 'IDENT' && !SCIENTIFIC_FUNCS[curr.value.toLowerCase()]);
+    const isNextVal =
+      next.type === 'NUMBER' ||
+      next.type === 'IDENT' ||
+      next.type === 'LPAREN';
+
+    if (isCurrVal && isNextVal) {
+      withImplicit.push({ type: 'OP', value: '*' });
+    }
+  }
+
+  return withImplicit;
 }
 
 const PRECEDENCE: Record<string, number> = {
@@ -378,6 +401,17 @@ const SCIENTIFIC_FUNCS: Record<string, (args: number[]) => number> = {
     const sec = args[2] || 0;
     return deg + min / 60 + sec / 3600;
   },
+  // Base-N & Bitwise Functions
+  and: (args) => (Math.trunc(args[0]) & Math.trunc(args[1])) >>> 0,
+  or: (args) => (Math.trunc(args[0]) | Math.trunc(args[1])) >>> 0,
+  xor: (args) => (Math.trunc(args[0]) ^ Math.trunc(args[1])) >>> 0,
+  not: (args) => (~Math.trunc(args[0])) >>> 0,
+  shl: (args) => (Math.trunc(args[0]) << Math.trunc(args[1])) >>> 0,
+  shr: (args) => (Math.trunc(args[0]) >>> Math.trunc(args[1])) >>> 0,
+  bin: (args) => parseInt(String(Math.trunc(args[0])), 2) || 0,
+  oct: (args) => parseInt(String(Math.trunc(args[0])), 8) || 0,
+  hex: (args) => parseInt(String(args[0]), 16) || 0,
+  dec: (args) => Number(args[0]) || 0,
 };
 
 const CONSTANTS: Record<string, number> = {

@@ -10,6 +10,7 @@ import {
   ChevronUp,
   ChevronDown,
   Compass,
+  Tag,
 } from 'lucide-react';
 import {
   MathNode,
@@ -25,6 +26,8 @@ import { CasioNaturalDisplay, ResultDisplayFormat } from './CasioNaturalDisplay'
 import { evaluateExpression } from '../utils/mathEvaluator';
 import { GeometryAndPhysicsModal, CalculationCategory } from './GeometryAndPhysicsModal';
 import { ConstantsModal } from './ConstantsModal';
+import { ScientificVariablesModal } from './ScientificVariablesModal';
+import { AlphaKeyVariableModal } from './AlphaKeyVariableModal';
 
 export type AngleUnit = 'deg' | 'rad' | 'gra';
 
@@ -48,6 +51,8 @@ interface KeyButtonProps {
   shiftAction?: () => void;
   alphaLabel?: string;
   alphaAction?: () => void;
+  onAlphaLongPress?: () => void;
+  isReserved?: boolean;
   longPressLabel?: string;
   className?: string;
   colSpan?: number;
@@ -65,6 +70,8 @@ const KeyButton: React.FC<KeyButtonProps> = ({
   shiftAction,
   alphaLabel,
   alphaAction,
+  onAlphaLongPress,
+  isReserved = false,
   longPressLabel,
   className = '',
   colSpan = 1,
@@ -78,8 +85,14 @@ const KeyButton: React.FC<KeyButtonProps> = ({
   const isLongPressRef = useRef<boolean>(false);
   const [isPressing, setIsPressing] = useState<boolean>(false);
 
-  const startPress = () => {
-    if (!onLongPress) return;
+  // In ALPHA mode, long press triggers onAlphaLongPress to open the variable assignment modal.
+  // In normal/shift mode, long press triggers onLongPress || shiftAction.
+  const effectiveLongPress = isAlphaActive
+    ? onAlphaLongPress
+    : (onLongPress || shiftAction);
+
+  const startPress = (e?: React.SyntheticEvent) => {
+    if (!effectiveLongPress) return;
     isLongPressRef.current = false;
     setIsPressing(true);
     timerRef.current = setTimeout(() => {
@@ -87,13 +100,16 @@ const KeyButton: React.FC<KeyButtonProps> = ({
       setIsPressing(false);
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         try {
-          navigator.vibrate(50);
+          navigator.vibrate(40);
         } catch {
           // ignore
         }
       }
-      onLongPress();
-    }, 420);
+      effectiveLongPress();
+      if (!isAlphaActive) {
+        onClearShiftAlpha();
+      }
+    }, 400);
   };
 
   const endPress = () => {
@@ -104,7 +120,7 @@ const KeyButton: React.FC<KeyButtonProps> = ({
     }
   };
 
-  const handleClick = () => {
+  const handleClick = (e: React.MouseEvent) => {
     if (isLongPressRef.current) {
       isLongPressRef.current = false;
       return;
@@ -118,7 +134,7 @@ const KeyButton: React.FC<KeyButtonProps> = ({
       onClearShiftAlpha();
     } else if (isAlphaActive) {
       if (alphaAction) {
-        alphaAction();
+        alphaAction(); // Tapping inserts the variable!
       } else {
         primaryAction();
       }
@@ -154,24 +170,29 @@ const KeyButton: React.FC<KeyButtonProps> = ({
     if (alphaLabel) {
       content = (
         <div className="flex flex-col items-center justify-center leading-none w-full h-full py-0.5">
-          <span className="text-[7px] font-black text-rose-700 uppercase tracking-tighter mb-0.5">
-            ALPHA
+          <span className="text-[7px] font-black text-emerald-700 uppercase tracking-tighter mb-0.5 flex items-center gap-0.5">
+            {isReserved ? '🔒 BLOQ' : 'ALPHA'}
           </span>
-          <span className="font-black text-rose-950 font-mono text-xs sm:text-sm tracking-tight scale-105">
+          <span className="font-black text-emerald-950 font-mono text-xs sm:text-sm tracking-tight scale-105">
             {alphaLabel}
           </span>
         </div>
       );
       styling =
-        'bg-rose-100 hover:bg-rose-200 text-rose-950 border-rose-400 ring-2 ring-rose-400/60 shadow-xs font-black';
+        'bg-emerald-100 hover:bg-emerald-200 text-emerald-950 border-emerald-400 ring-2 ring-emerald-400/60 shadow-xs font-black';
     } else {
-      content = <span className="opacity-35 text-xs sm:text-sm font-bold">{label}</span>;
-      styling = 'bg-slate-50 text-slate-400 border-slate-200 opacity-40';
+      // Empty key in ALPHA mode: shows faint key label without cluttering "(Vacía)" text
+      content = (
+        <div className="flex flex-col items-center justify-center leading-none w-full h-full py-0.5">
+          <span className="opacity-35 text-[11px] font-mono font-medium text-slate-400">
+            {label}
+          </span>
+        </div>
+      );
+      styling = 'bg-slate-50/70 hover:bg-slate-100 text-slate-400 border border-dashed border-slate-200 opacity-40';
     }
   } else {
     // Normal mode:
-    // Clearly shows Shift function in amber (top-left), Alpha variable in rose (top-right),
-    // primary label in center, and long-press action hint (bottom)
     const hasTopBadges = Boolean(shiftLabel || alphaLabel);
 
     content = (
@@ -180,7 +201,7 @@ const KeyButton: React.FC<KeyButtonProps> = ({
         <div className="w-full flex items-center justify-between text-[7.5px] sm:text-[8px] font-black leading-none min-h-[9px]">
           {shiftLabel ? (
             <span
-              className="text-amber-700 truncate max-w-[50%] font-mono tracking-tighter"
+              className="text-amber-700 truncate max-w-[50%] font-mono tracking-tighter font-black"
               title={`Shift: ${shiftLabel}`}
             >
               {shiftLabel}
@@ -190,9 +211,12 @@ const KeyButton: React.FC<KeyButtonProps> = ({
           )}
           {alphaLabel ? (
             <span
-              className="text-rose-700 truncate max-w-[50%] font-mono tracking-tighter ml-auto"
-              title={`Alpha: ${alphaLabel}`}
+              className={`truncate max-w-[50%] font-mono tracking-tighter ml-auto font-black flex items-center gap-0.5 ${
+                isReserved ? 'text-emerald-800' : 'text-emerald-700'
+              }`}
+              title={isReserved ? `Variable Reservada: ${alphaLabel}` : `Alpha: ${alphaLabel}`}
             >
+              {isReserved && <span className="text-[6.5px]">🔒</span>}
               {alphaLabel}
             </span>
           ) : (
@@ -233,11 +257,11 @@ const KeyButton: React.FC<KeyButtonProps> = ({
       onPointerLeave={endPress}
       onPointerCancel={endPress}
       onContextMenu={(e) => {
-        if (onLongPress) e.preventDefault();
+        if (effectiveLongPress) e.preventDefault();
       }}
       onClick={handleClick}
       style={{ gridColumn: colSpan > 1 ? `span ${colSpan} / span ${colSpan}` : undefined }}
-      className={`relative h-full rounded-lg sm:rounded-xl flex items-center justify-center cursor-pointer transition-all active:scale-95 shadow-2xs select-none border overflow-hidden ${styling}`}
+      className={`relative h-full rounded-lg sm:rounded-xl flex items-center justify-center cursor-pointer transition-all active:scale-95 shadow-2xs select-none border overflow-hidden touch-manipulation ${styling}`}
       title={title}
     >
       {/* Visual pulse/bar while holding for long-press */}
@@ -268,21 +292,172 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
   const [isConstantsOpen, setIsConstantsOpen] = useState<boolean>(false);
   const [isCalculationsOpen, setIsCalculationsOpen] = useState<boolean>(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
+  const [isVariablesOpen, setIsVariablesOpen] = useState<boolean>(false);
   const [copiedStatus, setCopiedStatus] = useState<boolean>(false);
 
   // Memory & Variables
   const [memoryM, setMemoryM] = useState<number>(0);
   const [lastAns, setLastAns] = useState<number>(0);
-  const [variables, setVariables] = useState<Record<string, number>>({
-    A: 0,
-    B: 0,
-    C: 0,
-    D: 0,
-    E: 0,
-    F: 0,
-    X: 0,
-    Y: 0,
+  const [variables, setVariables] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem('casio_scientific_variables');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return {
+      A: 0,
+      B: 0,
+      C: 0,
+      D: 0,
+      E: 0,
+      F: 0,
+      X: 0,
+      Y: 0,
+      M: 0,
+      Z: 0,
+    };
   });
+
+  // Variables reservadas del sistema para cálculo (integrales ∫dx, derivadas d/dx y álgebra)
+  // X, Y, Z NUNCA se vacían ni se borran, garantizando que el usuario siempre tenga teclas para X, Y y Z.
+  const RESERVED_ALPHA_KEYS: Record<
+    string,
+    { varName: string; defaultVal: number; description: string }
+  > = {
+    PAREN_L: { varName: 'X', defaultVal: 0, description: 'Variable canónica de cálculo (dx, d/dx)' },
+    PAREN_R: { varName: 'Y', defaultVal: 0, description: 'Segunda variable matemática' },
+    '1': { varName: 'Z', defaultVal: 0, description: 'Tercera variable matemática' },
+    X: { varName: 'X', defaultVal: 0, description: 'Variable canónica de cálculo (dx, d/dx)' },
+    Y: { varName: 'Y', defaultVal: 0, description: 'Segunda variable matemática' },
+    Z: { varName: 'Z', defaultVal: 0, description: 'Tercera variable matemática' },
+  };
+
+  // Custom variable names assigned per alpha key slot
+  const [keyCustomVarMap, setKeyCustomVarMap] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('casio_scientific_key_var_map');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return {};
+  });
+
+  // Alpha key variable modal state (keySlot, keyDisplayLabel, varName, varValue, isReserved)
+  const [alphaModalKey, setAlphaModalKey] = useState<{
+    keySlot: string;
+    keyDisplayLabel: string;
+    varName: string;
+    varValue: number;
+    isReserved?: boolean;
+  } | null>(null);
+
+  const handleSaveKeyVariable = (keySlot: string, newName: string, newValue: number) => {
+    const cleanSlot = keySlot.toUpperCase();
+    const cleanName = newName.toUpperCase();
+
+    setKeyCustomVarMap((prev) => {
+      const next = { ...prev, [cleanSlot]: cleanName };
+      try {
+        localStorage.setItem('casio_scientific_key_var_map', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+
+    setVariables((prev) => {
+      const next = { ...prev, [cleanName]: newValue };
+      return next;
+    });
+    setIsAlphaActive(false);
+  };
+
+  const handleDeleteKeyVariable = (keySlot: string, varName: string) => {
+    const cleanSlot = keySlot.toUpperCase();
+    const cleanName = varName.toUpperCase();
+
+    // Las variables reservadas X, Y, Z NO se eliminan ni se vacían de su tecla; solo se restablece su valor numérico a 0.
+    if (RESERVED_ALPHA_KEYS[cleanSlot] || RESERVED_ALPHA_KEYS[cleanName]) {
+      const resVar = RESERVED_ALPHA_KEYS[cleanSlot]?.varName || cleanName;
+      setVariables((prev) => ({
+        ...prev,
+        [resVar]: 0,
+      }));
+      setKeyCustomVarMap((prev) => {
+        const next = { ...prev };
+        delete next[cleanSlot];
+        delete next[resVar];
+        try {
+          localStorage.setItem('casio_scientific_key_var_map', JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+      setIsAlphaActive(false);
+      return;
+    }
+
+    // Mark other slots as explicitly empty
+    setKeyCustomVarMap((prev) => {
+      const next = { ...prev, [cleanSlot]: '__EMPTY__' };
+      try {
+        localStorage.setItem('casio_scientific_key_var_map', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+
+    setVariables((prev) => {
+      const next = { ...prev };
+      if (cleanName) delete next[cleanName];
+      if (cleanSlot) delete next[cleanSlot];
+      return next;
+    });
+    setIsAlphaActive(false);
+  };
+
+  const handleClearAllKeySlots = () => {
+    const allSlots = [
+      'G', 'H', 'I', 'J', 'K', 'L', 'M', 'D', 'E', 'F',
+      'N', 'P', 'Q', 'R', 'S', 'T', 'A', 'B', 'C', 'U', 'V', 'W',
+      'θ', 'r', 't', 'k', 'm', 'x', 'y', 'e', 'Ans', 'STO', 'VAR',
+      'R', 'T', 'K', 'ANS',
+      'FRAC', 'SQRT', 'X2', 'POW', 'LOG', 'LN', 'INT', 'SIN', 'COS', 'TAN',
+      '7', '8', '9', 'PCT', 'DEL', 'AC', '4', '5', '6',
+      'PLUS', 'MINUS', 'SD', '2', '3', 'MUL', 'DIV', 'PCT2', '0', 'DOT',
+      'EXP', 'ANS', 'EQ', 'CONV'
+    ];
+    // Se excluyen PAREN_L (X), PAREN_R (Y) y 1 (Z) para que NUNCA queden vacías
+    const newMap: Record<string, string> = {};
+    allSlots.forEach((s) => {
+      newMap[s.toUpperCase()] = '__EMPTY__';
+    });
+    setKeyCustomVarMap(newMap);
+    try {
+      localStorage.setItem('casio_scientific_key_var_map', JSON.stringify(newMap));
+    } catch {
+      // ignore
+    }
+    setVariables({
+      X: 0,
+      Y: 0,
+      Z: 0,
+    });
+    setIsAlphaActive(false);
+  };
+
+  // Save variables to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('casio_scientific_variables', JSON.stringify(variables));
+    } catch {
+      // ignore
+    }
+  }, [variables]);
 
   // History
   const [history, setHistory] = useState<HistoryItem[]>(() => {
@@ -335,69 +510,96 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
   // Insert 2-story fraction template
   const handleInsertFraction = useCallback(() => {
     if (isShiftActive) {
-      // Mixed fraction template: Whole + Num / Den
-      const id = generateId();
-      const fracNode: MathNode = {
-        type: 'mixed_fraction',
-        id,
-        whole: [],
-        num: [],
-        den: [],
-      };
-      setNodes((prev) => {
-        const res = insertNode(prev, cursor, fracNode, { slotId: `${id}:whole`, index: 0 });
-        setCursor(res.newCursor);
-        return res.newRoot;
-      });
-      setIsShiftActive(false);
-    } else {
-      // Standard 2-story fraction template: Num / Den
-      const id = generateId();
-      const fracNode: MathNode = {
-        type: 'fraction',
-        id,
-        num: [],
-        den: [],
-      };
-      setNodes((prev) => {
-        const res = insertNode(prev, cursor, fracNode, { slotId: `${id}:num`, index: 0 });
-        setCursor(res.newCursor);
-        return res.newRoot;
-      });
+      handleInsertMixedFraction();
+      return;
     }
+    const id = generateId();
+    const fracNode: MathNode = {
+      type: 'fraction',
+      id,
+      num: [],
+      den: [],
+    };
+    setNodes((prev) => {
+      const res = insertNode(prev, cursor, fracNode, { slotId: `${id}:num`, index: 0 });
+      setCursor(res.newCursor);
+      return res.newRoot;
+    });
+    setErrorMessage(undefined);
+  }, [cursor, isShiftActive]);
+
+  // Insert Mixed Fraction template: Whole + Num / Den
+  const handleInsertMixedFraction = useCallback(() => {
+    const id = generateId();
+    const fracNode: MathNode = {
+      type: 'mixed_fraction',
+      id,
+      whole: [],
+      num: [],
+      den: [],
+    };
+    setNodes((prev) => {
+      const res = insertNode(prev, cursor, fracNode, { slotId: `${id}:whole`, index: 0 });
+      setCursor(res.newCursor);
+      return res.newRoot;
+    });
+    if (isShiftActive) setIsShiftActive(false);
     setErrorMessage(undefined);
   }, [cursor, isShiftActive]);
 
   // Insert Square Root or Cube Root
   const handleInsertSqrt = useCallback(() => {
-    const id = generateId();
     if (isShiftActive) {
-      // Cube root
-      const rootNode: MathNode = {
-        type: 'nth_root',
-        id,
-        root: [{ type: 'char', id: generateId(), value: '3' }],
-        inner: [],
-      };
-      setNodes((prev) => {
-        const res = insertNode(prev, cursor, rootNode, { slotId: `${id}:inner`, index: 0 });
-        setCursor(res.newCursor);
-        return res.newRoot;
-      });
-      setIsShiftActive(false);
-    } else {
-      // Square root
-      const sqrtNode: MathNode = {
-        type: 'sqrt',
-        id,
-        inner: [],
-      };
-      setNodes((prev) => {
-        const res = insertNode(prev, cursor, sqrtNode, { slotId: `${id}:inner`, index: 0 });
-        setCursor(res.newCursor);
-        return res.newRoot;
-      });
+      handleInsertCbrt();
+      return;
     }
+    const id = generateId();
+    const sqrtNode: MathNode = {
+      type: 'sqrt',
+      id,
+      inner: [],
+    };
+    setNodes((prev) => {
+      const res = insertNode(prev, cursor, sqrtNode, { slotId: `${id}:inner`, index: 0 });
+      setCursor(res.newCursor);
+      return res.newRoot;
+    });
+    setErrorMessage(undefined);
+  }, [cursor, isShiftActive]);
+
+  // Insert Cube Root
+  const handleInsertCbrt = useCallback(() => {
+    const id = generateId();
+    const rootNode: MathNode = {
+      type: 'nth_root',
+      id,
+      root: [{ type: 'char', id: generateId(), value: '3' }],
+      inner: [],
+    };
+    setNodes((prev) => {
+      const res = insertNode(prev, cursor, rootNode, { slotId: `${id}:inner`, index: 0 });
+      setCursor(res.newCursor);
+      return res.newRoot;
+    });
+    if (isShiftActive) setIsShiftActive(false);
+    setErrorMessage(undefined);
+  }, [cursor, isShiftActive]);
+
+  // Insert Nth-Root
+  const handleInsertNthRoot = useCallback(() => {
+    const id = generateId();
+    const nthNode: MathNode = {
+      type: 'nth_root',
+      id,
+      root: [],
+      inner: [],
+    };
+    setNodes((prev) => {
+      const res = insertNode(prev, cursor, nthNode, { slotId: `${id}:root`, index: 0 });
+      setCursor(res.newCursor);
+      return res.newRoot;
+    });
+    if (isShiftActive) setIsShiftActive(false);
     setErrorMessage(undefined);
   }, [cursor, isShiftActive]);
 
@@ -441,36 +643,23 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
 
   // Insert Integral (cursor directly into integrand, no division!)
   const handleInsertIntegral = useCallback(() => {
-    const id = generateId();
     if (isShiftActive) {
-      // Derivative d/dx
-      const derivNode: MathNode = {
-        type: 'derivative',
-        id,
-        expr: [],
-        at: [],
-      };
-      setNodes((prev) => {
-        const res = insertNode(prev, cursor, derivNode, { slotId: `${id}:expr`, index: 0 });
-        setCursor(res.newCursor);
-        return res.newRoot;
-      });
-      setIsShiftActive(false);
-    } else {
-      // Integral template: cursor enters integrand directly!
-      const intNode: MathNode = {
-        type: 'integral',
-        id,
-        expr: [],
-        lower: [],
-        upper: [],
-      };
-      setNodes((prev) => {
-        const res = insertNode(prev, cursor, intNode, { slotId: `${id}:expr`, index: 0 });
-        setCursor(res.newCursor);
-        return res.newRoot;
-      });
+      handleInsertDerivative();
+      return;
     }
+    const id = generateId();
+    const intNode: MathNode = {
+      type: 'integral',
+      id,
+      expr: [],
+      lower: [],
+      upper: [],
+    };
+    setNodes((prev) => {
+      const res = insertNode(prev, cursor, intNode, { slotId: `${id}:expr`, index: 0 });
+      setCursor(res.newCursor);
+      return res.newRoot;
+    });
     setErrorMessage(undefined);
   }, [cursor, isShiftActive]);
 
@@ -485,6 +674,25 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
     };
     setNodes((prev) => {
       const res = insertNode(prev, cursor, derivNode, { slotId: `${id}:expr`, index: 0 });
+      setCursor(res.newCursor);
+      return res.newRoot;
+    });
+    if (isShiftActive) setIsShiftActive(false);
+    setErrorMessage(undefined);
+  }, [cursor, isShiftActive]);
+
+  // Insert Summation: lower limit (from a), upper limit (to b), expression f(x)
+  const handleInsertSummation = useCallback(() => {
+    const id = generateId();
+    const sumNode: MathNode = {
+      type: 'summation',
+      id,
+      expr: [],
+      start: [{ type: 'char', id: generateId(), value: '1' }],
+      end: [],
+    };
+    setNodes((prev) => {
+      const res = insertNode(prev, cursor, sumNode, { slotId: `${id}:expr`, index: 0 });
       setCursor(res.newCursor);
       return res.newRoot;
     });
@@ -727,6 +935,8 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
     label: React.ReactNode,
     primaryAction: () => void,
     options?: {
+      keyId?: string;
+      displayLabel?: string;
       shiftLabel?: string;
       shiftAction?: () => void;
       alphaLabel?: string;
@@ -738,14 +948,101 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
       onLongPress?: () => void;
     }
   ) => {
+    const rawAlpha = options?.alphaLabel;
+    const slotKey = (
+      options?.keyId ||
+      rawAlpha ||
+      (typeof label === 'string' ? label : '')
+    )
+      .toString()
+      .trim();
+    const cleanSlot = slotKey.toUpperCase();
+
+    // Human-readable key display name for modals and tooltips
+    const displayLabel =
+      options?.displayLabel ||
+      (typeof label === 'string' ? label : '') ||
+      (options?.keyId === 'frac' ? '■/□' : '') ||
+      options?.keyId ||
+      rawAlpha ||
+      'Tecla';
+
+    // Check if key is a reserved system variable (X, Y, Z) for calculation
+    const reservedInfo =
+      RESERVED_ALPHA_KEYS[cleanSlot] ||
+      (rawAlpha ? RESERVED_ALPHA_KEYS[rawAlpha.toUpperCase()] : undefined);
+    const isReserved = Boolean(reservedInfo);
+
+    // Check if user has explicitly emptied this key slot (Reserved keys X, Y, Z can NEVER be emptied)
+    const isExplicitlyEmpty = isReserved
+      ? false
+      : cleanSlot
+      ? keyCustomVarMap[cleanSlot] === '__EMPTY__' ||
+        (rawAlpha ? keyCustomVarMap[rawAlpha.toUpperCase()] === '__EMPTY__' : false)
+      : false;
+
+    // Check if a custom variable is assigned to this slot
+    const assignedCustomVar = cleanSlot
+      ? (keyCustomVarMap[cleanSlot] && keyCustomVarMap[cleanSlot] !== '__EMPTY__'
+          ? keyCustomVarMap[cleanSlot]
+          : undefined) ||
+        (rawAlpha && keyCustomVarMap[rawAlpha.toUpperCase()] && keyCustomVarMap[rawAlpha.toUpperCase()] !== '__EMPTY__'
+          ? keyCustomVarMap[rawAlpha.toUpperCase()]
+          : undefined)
+      : undefined;
+
+    // Effective Alpha Name:
+    // If reserved: ALWAYS its reserved var name ('X', 'Y', 'Z')!
+    // If explicitly empty, undefined! (NO letter, truly empty)
+    // If custom var assigned, that custom name.
+    // If standard default alpha exists and slot is not empty, use that default.
+    // Otherwise undefined (empty).
+    const effectiveAlphaName = isReserved
+      ? reservedInfo!.varName
+      : isExplicitlyEmpty
+      ? undefined
+      : (assignedCustomVar || rawAlpha);
+
+    const effectiveAlphaValue = effectiveAlphaName ? (variables[effectiveAlphaName] ?? 0) : 0;
+
+    // TAP in ALPHA mode: INSERTS THE VARIABLE DIRECTLY INTO EXPRESSION!
+    const effectiveAlphaAction = effectiveAlphaName
+      ? () => {
+          handleInsertText(effectiveAlphaName);
+        }
+      : undefined;
+
+    // LONG PRESS in ALPHA mode: OPENS MODAL TO ASSIGN, EDIT, OR DELETE (VACIAR)
+    // If the key is empty, varName is strictly EMPTY STRING ""!
+    // It will NEVER bring predefined dummy letters like G, H, I, etc.
+    const onAlphaLongPress = cleanSlot
+      ? () => {
+          const varNameToPass = isReserved
+            ? reservedInfo!.varName
+            : !isExplicitlyEmpty && effectiveAlphaName && (assignedCustomVar || variables[effectiveAlphaName] !== undefined)
+            ? effectiveAlphaName
+            : '';
+
+          setAlphaModalKey({
+            keySlot: cleanSlot,
+            keyDisplayLabel: displayLabel,
+            varName: varNameToPass,
+            varValue: effectiveAlphaValue,
+            isReserved,
+          });
+        }
+      : undefined;
+
     return (
       <KeyButton
         label={label}
         primaryAction={primaryAction}
         shiftLabel={options?.shiftLabel}
         shiftAction={options?.shiftAction}
-        alphaLabel={options?.alphaLabel}
-        alphaAction={options?.alphaAction}
+        alphaLabel={effectiveAlphaName}
+        alphaAction={effectiveAlphaAction}
+        onAlphaLongPress={onAlphaLongPress}
+        isReserved={isReserved}
         longPressLabel={options?.longPressLabel}
         className={options?.className}
         colSpan={options?.colSpan}
@@ -844,6 +1141,8 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               setAngleUnit((prev) => (prev === 'deg' ? 'rad' : prev === 'rad' ? 'gra' : 'deg'))
             }
             onOpenHistory={() => setIsHistoryOpen(true)}
+            variables={variables}
+            onOpenVariablesModal={() => setIsVariablesOpen(true)}
             evaluatedValue={evaluatedValue}
             errorMessage={errorMessage}
             resultFormat={resultFormat}
@@ -857,26 +1156,17 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
           className="h-[65%] min-h-0 flex flex-col gap-1 p-1 sm:p-1.5 bg-white rounded-2xl border border-slate-200/90 shadow-2xs"
           style={{ flex: '65 1 0%' }}
         >
-          {/* ROW 1: SHIFT, ALPHA, ARROWS (←, ↑, ↓, →) */}
+          {/* ROW 1: VAR, ALPHA, ARROWS (←, ↑, ↓, →) */}
           <div className="grid grid-cols-6 gap-1 flex-1 min-h-0">
-            {/* SHIFT */}
+            {/* VAR (Gestor de Variables & Asignación) */}
             <button
               type="button"
-              onClick={() => {
-                setIsShiftActive(!isShiftActive);
-                if (isAlphaActive) setIsAlphaActive(false);
-              }}
-              className={`h-full rounded-lg sm:rounded-xl font-black text-[10.5px] sm:text-xs transition-all cursor-pointer flex flex-col items-center justify-center leading-none border shadow-2xs active:scale-95 ${
-                isShiftActive
-                  ? 'bg-amber-500 text-white border-amber-600 ring-2 ring-amber-400/70 shadow-sm animate-pulse'
-                  : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
-              }`}
-              title="SHIFT (Activa funciones doradas de las teclas)"
+              onClick={() => setIsVariablesOpen(true)}
+              className="h-full rounded-lg sm:rounded-xl font-black text-[11px] sm:text-xs transition-all cursor-pointer flex items-center justify-center border shadow-2xs active:scale-95 bg-blue-50 hover:bg-blue-100 text-blue-900 border-blue-300 gap-1"
+              title="Variables (Clic para ver, crear o asignar variables)"
             >
-              <span>SHIFT</span>
-              <span className={`text-[7px] font-mono tracking-tighter ${isShiftActive ? 'text-amber-100' : 'text-amber-700'}`}>
-                {isShiftActive ? 'ACTIVO' : 'DORADO'}
-              </span>
+              <Tag className="w-3.5 h-3.5 text-blue-600" />
+              <span>VAR</span>
             </button>
 
             {/* ALPHA */}
@@ -886,17 +1176,14 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
                 setIsAlphaActive(!isAlphaActive);
                 if (isShiftActive) setIsShiftActive(false);
               }}
-              className={`h-full rounded-lg sm:rounded-xl font-black text-[10.5px] sm:text-xs transition-all cursor-pointer flex flex-col items-center justify-center leading-none border shadow-2xs active:scale-95 ${
+              className={`h-full rounded-lg sm:rounded-xl font-black text-[11px] sm:text-xs transition-all cursor-pointer flex items-center justify-center border shadow-2xs active:scale-95 ${
                 isAlphaActive
-                  ? 'bg-rose-500 text-white border-rose-600 ring-2 ring-rose-400/70 shadow-sm animate-pulse'
-                  : 'bg-rose-50 hover:bg-rose-100 text-rose-900 border-rose-300'
+                  ? 'bg-emerald-600 text-white border-emerald-700 ring-2 ring-emerald-400 shadow-sm animate-pulse'
+                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-300'
               }`}
-              title="ALPHA (Activa variables rojas de las teclas)"
+              title="ALPHA (Activa variables verdes de las teclas)"
             >
               <span>ALPHA</span>
-              <span className={`text-[7px] font-mono tracking-tighter ${isAlphaActive ? 'text-rose-100' : 'text-rose-700'}`}>
-                {isAlphaActive ? 'ACTIVO' : 'ROJO'}
-              </span>
             </button>
 
             {/* Arrow Left ← */}
@@ -950,10 +1237,13 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               </div>,
               handleInsertFraction,
               {
+                keyId: 'frac',
+                displayLabel: '■/□',
                 shiftLabel: '■ □/□',
-                shiftAction: handleInsertFraction,
+                shiftAction: handleInsertMixedFraction,
+                onLongPress: handleInsertMixedFraction,
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200',
-                title: 'Fracción (Shift: Fracción mixta)',
+                title: 'Fracción (Mantén presionado: Fracción mixta)',
               }
             )}
 
@@ -961,10 +1251,12 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '√■',
               handleInsertSqrt,
               {
+                keyId: 'sqrt',
                 shiftLabel: '∛■',
-                shiftAction: handleInsertSqrt,
+                shiftAction: handleInsertCbrt,
+                onLongPress: handleInsertCbrt,
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200',
-                title: 'Raíz cuadrada (Shift: Raíz cúbica)',
+                title: 'Raíz cuadrada (Mantén presionado: Raíz cúbica)',
               }
             )}
 
@@ -972,10 +1264,12 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'x²',
               () => handleInsertPower('2'),
               {
+                keyId: 'x2',
                 shiftLabel: 'x³',
                 shiftAction: () => handleInsertPower('3'),
+                onLongPress: () => handleInsertPower('3'),
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200',
-                title: 'Cuadrado x² (Shift: Cubo x³)',
+                title: 'Cuadrado x² (Mantén presionado: Cubo x³)',
               }
             )}
 
@@ -983,23 +1277,12 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'x^■',
               () => handleInsertPower(),
               {
+                keyId: 'pow',
                 shiftLabel: 'ˣ√■',
-                shiftAction: () => {
-                  const id = generateId();
-                  const nthNode: MathNode = {
-                    type: 'nth_root',
-                    id,
-                    root: [],
-                    inner: [],
-                  };
-                  setNodes((prev) => {
-                    const res = insertNode(prev, cursor, nthNode, { slotId: `${id}:root`, index: 0 });
-                    setCursor(res.newCursor);
-                    return res.newRoot;
-                  });
-                },
+                shiftAction: handleInsertNthRoot,
+                onLongPress: handleInsertNthRoot,
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200',
-                title: 'Potencia x^■ (Shift: Raíz n-ésima)',
+                title: 'Potencia x^■ (Mantén presionado: Raíz n-ésima)',
               }
             )}
 
@@ -1007,10 +1290,12 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'log',
               () => handleInsertText('log('),
               {
+                keyId: 'log',
                 shiftLabel: '10^■',
                 shiftAction: () => handleInsertText('10^('),
+                onLongPress: () => handleInsertText('10^('),
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200',
-                title: 'Logaritmo log (Shift: 10^x)',
+                title: 'Logaritmo log (Mantén presionado: 10^x)',
               }
             )}
 
@@ -1018,10 +1303,12 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'ln',
               () => handleInsertText('ln('),
               {
+                keyId: 'ln',
                 shiftLabel: 'e^■',
                 shiftAction: () => handleInsertText('exp('),
+                onLongPress: () => handleInsertText('exp('),
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200',
-                title: 'Logaritmo natural ln (Shift: e^x)',
+                title: 'Logaritmo natural ln (Mantén presionado: e^x)',
               }
             )}
           </div>
@@ -1032,10 +1319,14 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '∫dx',
               handleInsertIntegral,
               {
+                keyId: 'int',
                 shiftLabel: 'd/dx',
                 shiftAction: handleInsertDerivative,
+                onLongPress: handleInsertDerivative,
+                alphaLabel: 'M',
+                alphaAction: () => handleInsertText('M'),
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200 font-serif',
-                title: 'Integral ∫ (Shift: Derivada d/dx)',
+                title: 'Integral ∫ (Mantén presionado: Derivada d/dx | Alpha: M)',
               }
             )}
 
@@ -1043,12 +1334,14 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'sin',
               () => handleInsertText('sin('),
               {
+                keyId: 'sin',
                 shiftLabel: 'sin⁻¹',
                 shiftAction: () => handleInsertText('asin('),
+                onLongPress: () => handleInsertText('asin('),
                 alphaLabel: 'D',
                 alphaAction: () => handleInsertText('D'),
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200',
-                title: 'Seno (Shift: asin, Alpha: D)',
+                title: 'Seno (Mantén presionado: asin | Alpha: D)',
               }
             )}
 
@@ -1056,12 +1349,14 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'cos',
               () => handleInsertText('cos('),
               {
+                keyId: 'cos',
                 shiftLabel: 'cos⁻¹',
                 shiftAction: () => handleInsertText('acos('),
+                onLongPress: () => handleInsertText('acos('),
                 alphaLabel: 'E',
                 alphaAction: () => handleInsertText('E'),
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200',
-                title: 'Coseno (Shift: acos, Alpha: E)',
+                title: 'Coseno (Mantén presionado: acos | Alpha: E)',
               }
             )}
 
@@ -1069,12 +1364,14 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'tan',
               () => handleInsertText('tan('),
               {
+                keyId: 'tan',
                 shiftLabel: 'tan⁻¹',
                 shiftAction: () => handleInsertText('atan('),
+                onLongPress: () => handleInsertText('atan('),
                 alphaLabel: 'F',
                 alphaAction: () => handleInsertText('F'),
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200',
-                title: 'Tangente (Shift: atan, Alpha: F)',
+                title: 'Tangente (Mantén presionado: atan | Alpha: F)',
               }
             )}
 
@@ -1082,12 +1379,14 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '(',
               () => handleInsertText('('),
               {
+                keyId: 'paren_l',
                 shiftLabel: 'hyp',
                 shiftAction: () => handleInsertText('sinh('),
+                onLongPress: () => handleInsertText('sinh('),
                 alphaLabel: 'X',
                 alphaAction: () => handleInsertText('X'),
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200 font-mono',
-                title: 'Paréntesis ( (Shift: hyp, Alpha: X)',
+                title: 'Paréntesis ( (Mantén presionado: sinh | Alpha: X)',
               }
             )}
 
@@ -1095,12 +1394,14 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               ')',
               () => handleInsertText(')'),
               {
+                keyId: 'paren_r',
                 shiftLabel: 'Σ',
-                shiftAction: handleInsertLogBase,
+                shiftAction: handleInsertSummation,
+                onLongPress: handleInsertSummation,
                 alphaLabel: 'Y',
                 alphaAction: () => handleInsertText('Y'),
                 className: 'bg-slate-50 hover:bg-slate-100 text-slate-900 border-slate-200 font-mono',
-                title: 'Paréntesis ) (Shift: Sumatoria, Alpha: Y)',
+                title: 'Paréntesis ) (Mantén presionado: Sumatoria Σ | Alpha: Y)',
               }
             )}
           </div>
@@ -1111,10 +1412,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '7',
               () => handleInsertText('7'),
               {
+                keyId: '7',
                 shiftLabel: 'CONST',
                 shiftAction: () => setIsConstantsOpen(true),
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-base',
-                title: '7 (Shift: Constantes científicas CONST)',
+                title: '7 (Mantén presionado: Constantes)',
               }
             )}
 
@@ -1122,10 +1424,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '8',
               () => handleInsertText('8'),
               {
+                keyId: '8',
                 shiftLabel: 'CONV',
                 shiftAction: () => setIsCalculationsOpen(true),
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-base',
-                title: '8 (Shift: Conversión y cálculos)',
+                title: '8 (Mantén presionado: Conversor)',
               }
             )}
 
@@ -1133,10 +1436,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '9',
               () => handleInsertText('9'),
               {
+                keyId: '9',
                 shiftLabel: 'CLR',
                 shiftAction: handleClearAll,
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-base',
-                title: '9 (Shift: Limpiar pantalla)',
+                title: '9 (Mantén presionado: Limpiar)',
               }
             )}
 
@@ -1145,10 +1449,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '%',
               () => handleInsertText('%'),
               {
+                keyId: 'pct',
                 shiftLabel: 'abs',
                 shiftAction: () => handleInsertText('abs('),
                 className: 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-200 font-bold',
-                title: 'Porcentaje (Shift: Valor absoluto abs)',
+                title: 'Porcentaje (Mantén presionado: abs)',
               }
             )}
 
@@ -1157,10 +1462,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'DEL',
               handleDelete,
               {
+                keyId: 'del',
                 shiftLabel: 'INS',
                 shiftAction: handleInsertSlot,
                 className: 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 font-bold',
-                title: 'Borrar (Shift: Insertar espacio/casilla INS)',
+                title: 'Borrar (Mantén presionado: Insertar casilla)',
               }
             )}
 
@@ -1169,6 +1475,7 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'AC',
               handleClearAll,
               {
+                keyId: 'ac',
                 shiftLabel: 'RESET',
                 shiftAction: () => {
                   handleClearAll();
@@ -1176,7 +1483,7 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
                   setLastAns(0);
                 },
                 className: 'bg-rose-100 hover:bg-rose-200 text-rose-800 border-rose-300 font-bold',
-                title: 'Limpiar todo (AC) (Shift: Reiniciar memoria)',
+                title: 'Limpiar todo AC (Mantén presionado: Reset memoria)',
               }
             )}
           </div>
@@ -1187,6 +1494,7 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '4',
               () => handleInsertText('4'),
               {
+                keyId: '4',
                 alphaLabel: 'A',
                 alphaAction: () => handleInsertText('A'),
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-base',
@@ -1198,6 +1506,7 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '5',
               () => handleInsertText('5'),
               {
+                keyId: '5',
                 alphaLabel: 'B',
                 alphaAction: () => handleInsertText('B'),
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-base',
@@ -1209,6 +1518,7 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '6',
               () => handleInsertText('6'),
               {
+                keyId: '6',
                 alphaLabel: 'C',
                 alphaAction: () => handleInsertText('C'),
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-base',
@@ -1221,10 +1531,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '+',
               () => handleInsertText('+'),
               {
+                keyId: 'plus',
                 shiftLabel: 'Pol',
                 shiftAction: () => handleInsertText('pol('),
                 className: 'bg-indigo-50/70 hover:bg-indigo-100 text-indigo-900 border-indigo-200 font-bold text-base',
-                title: 'Suma (Shift: Conversión rectangular a polar Pol)',
+                title: 'Suma (Mantén presionado: Pol)',
               }
             )}
 
@@ -1233,10 +1544,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '-',
               () => handleInsertText('-'),
               {
+                keyId: 'minus',
                 shiftLabel: 'Rec',
                 shiftAction: () => handleInsertText('rec('),
                 className: 'bg-indigo-50/70 hover:bg-indigo-100 text-indigo-900 border-indigo-200 font-bold text-base',
-                title: 'Resta (Shift: Conversión polar a rectangular Rec)',
+                title: 'Resta (Mantén presionado: Rec)',
               }
             )}
 
@@ -1245,10 +1557,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'S ⇔ D',
               handleToggleSD,
               {
+                keyId: 'sd',
                 shiftLabel: 'a b/c',
                 shiftAction: () => setResultFormat((prev) => (prev === 'mixed' ? 'fraction' : 'mixed')),
                 className: 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200 font-bold text-xs',
-                title: 'Alternar Fracción ⇔ Decimal ⇔ Mixto (Shift: Formato mixto)',
+                title: 'Alternar Fracción ⇔ Decimal ⇔ Mixto (Mantén presionado: Mixto)',
               }
             )}
           </div>
@@ -1259,10 +1572,13 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '1',
               () => handleInsertText('1'),
               {
+                keyId: '1',
                 shiftLabel: '° \' "',
                 shiftAction: () => handleInsertText('°'),
+                alphaLabel: 'Z',
+                alphaAction: () => handleInsertText('Z'),
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-base',
-                title: '1 (Shift: Grados/Min/Seg)',
+                title: '1 (Mantén presionado: Grados | Alpha: Z)',
               }
             )}
 
@@ -1270,10 +1586,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '2',
               () => handleInsertText('2'),
               {
+                keyId: '2',
                 shiftLabel: 'Rnd',
                 shiftAction: () => handleInsertText('rnd('),
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-base',
-                title: '2 (Shift: Redondeo Rnd)',
+                title: '2 (Mantén presionado: Redondeo Rnd)',
               }
             )}
 
@@ -1281,10 +1598,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '3',
               () => handleInsertText('3'),
               {
+                keyId: '3',
                 shiftLabel: 'x!',
                 shiftAction: () => handleInsertText('!'),
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-base',
-                title: '3 (Shift: Factorial x!)',
+                title: '3 (Mantén presionado: Factorial x!)',
               }
             )}
 
@@ -1293,10 +1611,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '×',
               () => handleInsertText('*'),
               {
+                keyId: 'mul',
                 shiftLabel: 'nPr',
                 shiftAction: () => handleInsertText(' nPr '),
                 className: 'bg-indigo-50/70 hover:bg-indigo-100 text-indigo-900 border-indigo-200 font-bold text-base',
-                title: 'Multiplicación (Shift: Permutaciones nPr)',
+                title: 'Multiplicación (Mantén presionado: Permutaciones nPr)',
               }
             )}
 
@@ -1305,10 +1624,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '÷',
               () => handleInsertText('/'),
               {
+                keyId: 'div',
                 shiftLabel: 'nCr',
                 shiftAction: () => handleInsertText(' nCr '),
                 className: 'bg-indigo-50/70 hover:bg-indigo-100 text-indigo-900 border-indigo-200 font-bold text-base',
-                title: 'División (Shift: Combinaciones nCr)',
+                title: 'División (Mantén presionado: Combinaciones nCr)',
               }
             )}
 
@@ -1317,10 +1637,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '%',
               () => handleInsertText('%'),
               {
+                keyId: 'pct2',
                 shiftLabel: 'abs',
                 shiftAction: () => handleInsertText('abs('),
                 className: 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-200 font-bold',
-                title: 'Porcentaje (Shift: Valor absoluto)',
+                title: 'Porcentaje (Mantén presionado: Valor absoluto)',
               }
             )}
           </div>
@@ -1331,13 +1652,14 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '0',
               () => handleInsertText('0'),
               {
+                keyId: '0',
                 shiftLabel: 'Ran#',
                 shiftAction: () => {
                   const rnd = (Math.round(Math.random() * 1000) / 1000).toString();
                   handleInsertText(rnd);
                 },
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-base',
-                title: '0 (Shift: Número aleatorio Ran#)',
+                title: '0 (Mantén presionado: Ran#)',
               }
             )}
 
@@ -1345,10 +1667,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '.',
               () => handleInsertText('.'),
               {
+                keyId: 'dot',
                 shiftLabel: 'RanInt',
                 shiftAction: () => handleInsertText('ranint('),
                 className: 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 font-mono text-xl leading-none',
-                title: 'Punto decimal (Shift: Entero aleatorio)',
+                title: 'Punto decimal (Mantén presionado: Entero aleatorio)',
               }
             )}
 
@@ -1356,12 +1679,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '×10ˣ',
               () => handleInsertText('*10^('),
               {
+                keyId: 'exp',
                 shiftLabel: 'π',
                 shiftAction: () => handleInsertText('pi'),
-                alphaLabel: 'e',
-                alphaAction: () => handleInsertText('e'),
                 className: 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-200 font-bold text-xs',
-                title: 'Exponente ×10ˣ (Shift: π, Alpha: e)',
+                title: 'Exponente ×10ˣ (Mantén presionado: π)',
               }
             )}
 
@@ -1370,6 +1692,7 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               'Ans',
               () => handleInsertText('Ans'),
               {
+                keyId: 'ans',
                 shiftLabel: 'PreAns',
                 shiftAction: () => handleInsertText('Ans'),
                 longPressLabel: 'Copiar',
@@ -1384,6 +1707,7 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               '=',
               handleEvaluate,
               {
+                keyId: 'eq',
                 shiftLabel: 'Historial',
                 shiftAction: () => setIsHistoryOpen(true),
                 longPressLabel: 'Historial',
@@ -1401,10 +1725,11 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
               </div>,
               () => setIsCalculationsOpen(true),
               {
+                keyId: 'conv',
                 shiftLabel: 'FÓRMULAS',
                 shiftAction: () => setIsCalculationsOpen(true),
                 className: 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-200 font-bold',
-                title: 'Conversor y cálculos de Geometría y Física',
+                title: 'Conversor y cálculos (Mantén presionado: Fórmulas)',
               }
             )}
           </div>
@@ -1430,6 +1755,33 @@ export const CasioScientificCalculator: React.FC<CasioScientificCalculatorProps>
           }
         }}
       />
+
+      {/* 3. Scientific Variables Modal (A, B, C, D, E, F, X, Y, M, Z) */}
+      <ScientificVariablesModal
+        isOpen={isVariablesOpen}
+        onClose={() => setIsVariablesOpen(false)}
+        variables={variables}
+        onSaveVariables={(newVars) => setVariables(newVars)}
+        lastAns={lastAns}
+        onInsertVariable={(varName) => handleInsertText(varName)}
+        onClearAllKeyAlpha={handleClearAllKeySlots}
+      />
+
+      {/* 4. Alpha Key Variable Quick Editor / Creator Modal */}
+      {alphaModalKey && (
+        <AlphaKeyVariableModal
+          isOpen={Boolean(alphaModalKey)}
+          onClose={() => setAlphaModalKey(null)}
+          keySlot={alphaModalKey.keySlot}
+          keyDisplayLabel={alphaModalKey.keyDisplayLabel}
+          initialName={alphaModalKey.varName}
+          initialValue={alphaModalKey.varValue}
+          isReserved={alphaModalKey.isReserved}
+          onSave={handleSaveKeyVariable}
+          onDelete={handleDeleteKeyVariable}
+          onInsert={(varName) => handleInsertText(varName)}
+        />
+      )}
     </div>
   );
 };

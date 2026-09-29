@@ -9,38 +9,38 @@ import {
   Code2,
   FileCode,
   Loader2,
-  Users,
-  ArrowRight,
 } from 'lucide-react';
 import { toPng, toBlob } from 'html-to-image';
-import {
-  Sheet,
-  ComputedRow,
-  ComputedSheetTotals,
-  RatesState,
-  AppSettings,
-} from '../types';
-import { encodeSheetShare } from '../utils/shareImporter';
-import { formatCurrency, formatNumber } from '../utils/currency';
+import { TapeRow } from './TapeCalculatorModal';
+import { encodeCalcAccountShare } from '../utils/shareImporter';
+import { formatNumber } from '../utils/currency';
 
-interface ExportReportModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  sheet: Sheet;
-  computedRows: ComputedRow[];
-  totals: ComputedSheetTotals;
-  rates: RatesState;
-  settings: AppSettings;
+export interface TapeRowItem {
+  id: string;
+  description: string;
+  expression: string;
+  evaluatedValue: number;
+  subtotal: number;
+  lineNum: number;
+  isValid: boolean;
+  isMathOp?: boolean;
 }
 
-export const ExportReportModal: React.FC<ExportReportModalProps> = ({
+interface ShareTapeAccountModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  accountName: string;
+  rows: TapeRowItem[] | TapeRow[];
+  grandTotal: number;
+  shareCode?: string;
+}
+
+export const ShareTapeAccountModal: React.FC<ShareTapeAccountModalProps> = ({
   isOpen,
   onClose,
-  sheet,
-  computedRows,
-  totals,
-  rates,
-  settings,
+  accountName,
+  rows,
+  grandTotal,
 }) => {
   // Exactly 3 tabs with 'image' as the 1st one
   const [activeTab, setActiveTab] = useState<'image' | 'base64' | 'json'>('image');
@@ -53,125 +53,46 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
 
   if (!isOpen) return null;
 
-  const nowFormatted = new Date().toLocaleString('es-VE', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
+  const validRows = rows.filter((r) => r.expression.trim() || r.description.trim());
+
+  const dateStr = new Date().toLocaleDateString('es-VE', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 
-  const members = sheet.members || [];
-  const isTricountActive = Boolean(sheet.isTricountActive && members.length > 0);
-  const settleCurrency = settings.displayCurrency;
+  // Base64 Payload
+  const base64Code = encodeCalcAccountShare(
+    accountName,
+    validRows.map((r) => ({
+      id: (r as any).id || '',
+      description: r.description,
+      expression: r.expression,
+    }))
+  );
 
-  // Compute Tricount statistics
-  const tricountData = (() => {
-    if (!isTricountActive) return null;
-
-    const paidByPerson: Record<string, number> = {};
-    members.forEach((m) => {
-      paidByPerson[m] = 0;
-    });
-
-    let totalShared = 0;
-    computedRows.forEach((row) => {
-      const val = Math.abs(row.equivalents[settleCurrency]);
-      const payer = row.payer && members.includes(row.payer) ? row.payer : members[0];
-      if (payer && val > 0) {
-        paidByPerson[payer] = (paidByPerson[payer] || 0) + val;
-        totalShared += val;
-      }
-    });
-
-    const fairShare = members.length > 0 ? totalShared / members.length : 0;
-    const balances: Record<string, number> = {};
-    members.forEach((m) => {
-      balances[m] = (paidByPerson[m] || 0) - fairShare;
-    });
-
-    const debtors: Array<{ name: string; balance: number }> = [];
-    const creditors: Array<{ name: string; balance: number }> = [];
-
-    members.forEach((m) => {
-      const bal = balances[m] || 0;
-      if (bal < -0.009) debtors.push({ name: m, balance: -bal });
-      else if (bal > 0.009) creditors.push({ name: m, balance: bal });
-    });
-
-    const transfers: Array<{
-      from: string;
-      to: string;
-      amount: number;
-      inUSD: number;
-      inVES: number;
-      inEUR: number;
-      inUSDT: number;
-    }> = [];
-
-    let dIdx = 0;
-    let cIdx = 0;
-    const dCopy = debtors.map((d) => ({ ...d }));
-    const cCopy = creditors.map((c) => ({ ...c }));
-
-    while (dIdx < dCopy.length && cIdx < cCopy.length) {
-      const d = dCopy[dIdx];
-      const c = cCopy[cIdx];
-      const amt = Math.min(d.balance, c.balance);
-      if (amt > 0.001) {
-        const inVES =
-          settleCurrency === 'VES'
-            ? amt
-            : amt * (rates[settleCurrency]?.rateToVES || 1);
-
-        transfers.push({
-          from: d.name,
-          to: c.name,
-          amount: amt,
-          inVES,
-          inUSD: inVES / (rates.USD?.rateToVES || 1),
-          inEUR: inVES / (rates.EUR?.rateToVES || 1),
-          inUSDT: inVES / (rates.USDT?.rateToVES || 1),
-        });
-      }
-      d.balance -= amt;
-      c.balance -= amt;
-      if (d.balance <= 0.009) dIdx++;
-      if (c.balance <= 0.009) cIdx++;
-    }
-
-    return {
-      totalShared,
-      fairShare,
-      paidByPerson,
-      balances,
-      transfers,
-    };
-  })();
-
-  // 1. Base64
-  const sheetBase64 = encodeSheetShare(sheet);
-
-  // 2. Structured JSON
-  const sheetJsonString = JSON.stringify(
+  // JSON Structure
+  const rawJsonData = JSON.stringify(
     {
       app: 'ProCalc',
       version: '2.0',
-      type: 'spreadsheet_sheet',
+      type: 'calculator_account',
+      name: accountName,
+      grandTotal,
       exportedAt: new Date().toISOString(),
-      sheet: {
-        id: sheet.id,
-        title: sheet.title,
-        currency: sheet.currency,
-        isTricountActive: sheet.isTricountActive,
-        members: sheet.members,
-        payer: sheet.payer,
-        rows: sheet.rows,
-        createdAt: sheet.createdAt,
-      },
+      rows: validRows.map((r) => ({
+        description: r.description,
+        expression: r.expression,
+        subtotal: (r as any).subtotal,
+      })),
     },
     null,
     2
   );
 
-  // Generate Image Blob
+  // Generate Image Blob capturing full height
   const handleGenerateImage = async (): Promise<Blob | null> => {
     if (!receiptRef.current) return null;
     setIsGenerating(true);
@@ -179,7 +100,7 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
       await new Promise((resolve) => setTimeout(resolve, 80));
       const elem = receiptRef.current;
       const blob = await toBlob(elem, {
-        pixelRatio: 2.2,
+        pixelRatio: 2.5,
         backgroundColor: '#ffffff',
         width: elem.offsetWidth || elem.scrollWidth,
         height: elem.offsetHeight || elem.scrollHeight,
@@ -222,15 +143,15 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
       const blob = await handleGenerateImage();
       if (!blob) return;
 
-      const file = new File([blob], `${sheet.title.replace(/\s+/g, '_')}_reporte.png`, {
+      const file = new File([blob], `${accountName.replace(/\s+/g, '_')}_cuenta.png`, {
         type: 'image/png',
       });
 
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
-          title: sheet.title,
-          text: `Reporte de cuenta: ${sheet.title}`,
+          title: accountName,
+          text: `Comprobante de cuenta: ${accountName} (Total: $${formatNumber(grandTotal, 2)})`,
         });
       } else {
         handleDownloadImage();
@@ -249,13 +170,13 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
       await new Promise((resolve) => setTimeout(resolve, 80));
       const elem = receiptRef.current;
       const dataUrl = await toPng(elem, {
-        pixelRatio: 2.2,
+        pixelRatio: 2.5,
         backgroundColor: '#ffffff',
         width: elem.offsetWidth || elem.scrollWidth,
         height: elem.offsetHeight || elem.scrollHeight,
       });
       const link = document.createElement('a');
-      link.download = `${sheet.title.replace(/\s+/g, '_')}_reporte.png`;
+      link.download = `${accountName.replace(/\s+/g, '_')}_cuenta.png`;
       link.href = dataUrl;
       link.click();
     } catch (err) {
@@ -268,7 +189,7 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
   // Copy Base64
   const handleCopyBase64 = async () => {
     try {
-      await navigator.clipboard.writeText(sheetBase64);
+      await navigator.clipboard.writeText(base64Code);
       setCopiedBase64(true);
       setTimeout(() => setCopiedBase64(false), 2500);
     } catch (err) {
@@ -281,8 +202,8 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
     try {
       if (navigator.share) {
         await navigator.share({
-          title: `Cuenta: ${sheet.title}`,
-          text: sheetBase64,
+          title: `Cuenta: ${accountName}`,
+          text: base64Code,
         });
       } else {
         handleCopyBase64();
@@ -295,11 +216,11 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
   // Copy JSON
   const handleCopyJson = async () => {
     try {
-      await navigator.clipboard.writeText(sheetJsonString);
+      await navigator.clipboard.writeText(rawJsonData);
       setCopiedJson(true);
       setTimeout(() => setCopiedJson(false), 2500);
     } catch (err) {
-      console.error('Error copying json', err);
+      console.error('Error copying JSON', err);
     }
   };
 
@@ -308,8 +229,8 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
     try {
       if (navigator.share) {
         await navigator.share({
-          title: `JSON: ${sheet.title}`,
-          text: sheetJsonString,
+          title: `JSON: ${accountName}`,
+          text: rawJsonData,
         });
       } else {
         handleCopyJson();
@@ -322,10 +243,10 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
   // Download .json
   const handleDownloadJson = () => {
     try {
-      const blob = new Blob([sheetJsonString], { type: 'application/json' });
+      const blob = new Blob([rawJsonData], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.download = `${sheet.title.replace(/\s+/g, '_')}_cuenta.json`;
+      link.download = `${accountName.replace(/\s+/g, '_')}_cuenta.json`;
       link.href = url;
       link.click();
       URL.revokeObjectURL(url);
@@ -345,10 +266,10 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
             </div>
             <div>
               <h3 className="font-extrabold text-sm text-slate-900 leading-tight">
-                Compartir Cuenta: {sheet.title}
+                Compartir Cuenta: {accountName}
               </h3>
               <p className="text-[11px] text-slate-500">
-                {sheet.rows.length} filas • Moneda base: {sheet.currency}
+                {validRows.length} registros • Total: ${formatNumber(grandTotal, 2)}
               </p>
             </div>
           </div>
@@ -408,84 +329,51 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
           {/* TAB 1: IMAGEN */}
           {activeTab === 'image' ? (
             <div className="flex flex-col items-center gap-3">
-              {/* Scrollable Container with Complete Report Canvas inside */}
+              {/* Scrollable Container with Complete Receipt Canvas inside */}
               <div className="w-full flex justify-center bg-slate-100 p-2 sm:p-3 rounded-xl border border-slate-200 overflow-y-auto max-h-[55vh] scrollbar-thin">
                 <div
                   ref={receiptRef}
-                  className="bg-white rounded-xl shadow-xs border border-slate-200 p-4 w-full max-w-[400px] text-slate-800 font-sans h-auto"
-                  style={{ minWidth: '330px' }}
+                  className="bg-white rounded-xl shadow-xs border border-slate-200 p-4 w-full max-w-[380px] text-slate-800 font-sans h-auto"
+                  style={{ minWidth: '320px' }}
                 >
                   {/* Receipt Header */}
                   <div className="text-center border-b border-dashed border-slate-300 pb-3 mb-3">
                     <div className="inline-block px-2.5 py-0.5 rounded bg-indigo-50 text-indigo-800 text-[10px] font-black uppercase tracking-wider mb-1 border border-indigo-100">
-                      Reporte de Gastos y Cuenta
+                      Comprobante de Cuenta
                     </div>
                     <h4 className="text-base font-extrabold text-slate-900 leading-tight">
-                      {sheet.title}
+                      {accountName}
                     </h4>
                     <span className="text-[10px] text-slate-400 font-mono">
-                      {nowFormatted}
+                      {dateStr}
                     </span>
                   </div>
 
-                  {/* Rates Bar */}
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 mb-3 text-[10px] space-y-0.5 font-medium text-slate-600">
-                    <div className="font-bold text-slate-700 uppercase tracking-wider text-[9px] mb-1">
-                      Tasas del Día (DolarAPI):
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>USD (BCV):</span>
-                      <span className="font-mono font-bold text-slate-900">
-                        Bs. {formatNumber(rates.USD?.rateToVES || 0, 2)}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>USDT (Paralelo):</span>
-                      <span className="font-mono font-bold text-slate-900">
-                        Bs. {formatNumber(rates.USDT?.rateToVES || 0, 2)}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>EUR (BCV):</span>
-                      <span className="font-mono font-bold text-slate-900">
-                        Bs. {formatNumber(rates.EUR?.rateToVES || 0, 2)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Complete Rows Table */}
-                  <div className="space-y-1.5 text-xs mb-3">
-                    <div className="font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">
-                      Desglose de Gastos:
-                    </div>
+                  {/* Complete Rows Table: # | Descripción | Monto | Subtotal */}
+                  <div className="space-y-1.5 text-xs">
                     <table className="w-full border-collapse text-left">
                       <thead>
                         <tr className="border-b border-slate-200 text-[10px] font-bold text-slate-400 uppercase tracking-tight">
-                          <th className="py-1 px-1 w-5 text-center">#</th>
-                          <th className="py-1 px-1.5">Concepto</th>
-                          <th className="py-1 px-1.5 text-right">Monto Orig.</th>
-                          <th className="py-1 px-1.5 text-right">Equiv. $</th>
+                          <th className="py-1 px-1 w-6 text-center">#</th>
+                          <th className="py-1 px-1.5">Descripción</th>
+                          <th className="py-1 px-1.5 text-right">Monto</th>
+                          <th className="py-1 px-1.5 text-right">Subtotal</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {computedRows.map((row, i) => (
-                          <tr key={row.id || i} className="text-[11px]">
+                        {validRows.map((r, i) => (
+                          <tr key={(r as any).id || i} className="text-[11px]">
                             <td className="py-1.5 px-1 font-mono font-bold text-slate-400 text-center">
                               {i + 1}
                             </td>
                             <td className="py-1.5 px-1.5 font-medium text-slate-700 max-w-[120px] break-words">
-                              {row.concept.trim() || <span className="text-slate-300">—</span>}
-                              {row.payer && isTricountActive && (
-                                <span className="text-[9px] text-indigo-600 block">
-                                  ({row.payer})
-                                </span>
-                              )}
+                              {r.description.trim() || <span className="text-slate-300">—</span>}
                             </td>
                             <td className="py-1.5 px-1.5 font-mono font-bold text-slate-900 text-right whitespace-nowrap">
-                              {formatCurrency(row.evaluatedValue, row.currency, settings.decimals)}
+                              {r.expression.trim()}
                             </td>
                             <td className="py-1.5 px-1.5 font-mono font-bold text-indigo-700 text-right whitespace-nowrap">
-                              ${formatNumber(row.equivalents.USD, 2)}
+                              ${formatNumber((r as any).subtotal || (r as any).evaluatedValue || 0, 2)}
                             </td>
                           </tr>
                         ))}
@@ -493,80 +381,15 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                     </table>
                   </div>
 
-                  {/* 4 Currency Totals Bar */}
-                  <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-2.5 mb-3 space-y-1 text-xs">
-                    <div className="font-black text-indigo-950 uppercase tracking-tight text-[10.5px] border-b border-indigo-200/60 pb-1 flex justify-between">
-                      <span>Totales Multimoneda</span>
-                      <span className="text-indigo-600">4 Divisas</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-x-2 gap-y-1 pt-1 font-mono text-[11px]">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-bold">Total $:</span>
-                        <span className="font-bold text-slate-900">${formatNumber(totals.netByCurrency.USD, 2)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-bold">Total EUR:</span>
-                        <span className="font-bold text-slate-900">€{formatNumber(totals.netByCurrency.EUR, 2)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-bold">Total USDT:</span>
-                        <span className="font-bold text-slate-900">{formatNumber(totals.netByCurrency.USDT, 2)}</span>
-                      </div>
-                      <div className="flex justify-between col-span-2 pt-1 border-t border-indigo-200/60">
-                        <span className="text-indigo-900 font-black">A PAGAR (Bs):</span>
-                        <span className="font-black text-indigo-900">Bs. {formatNumber(totals.netByCurrency.VES, 2)}</span>
-                      </div>
-                    </div>
+                  {/* Total Bar */}
+                  <div className="mt-4 pt-3 border-t-2 border-slate-900 flex items-center justify-between">
+                    <span className="font-black text-sm text-slate-900 uppercase tracking-tight">
+                      Total General:
+                    </span>
+                    <span className="font-mono font-black text-lg text-indigo-900">
+                      ${formatNumber(grandTotal, 2)}
+                    </span>
                   </div>
-
-                  {/* Tricount Section if Active */}
-                  {tricountData && (
-                    <div className="border-t border-dashed border-slate-300 pt-2.5 space-y-2 text-xs">
-                      <div className="font-black text-slate-800 uppercase tracking-tight text-[11px] flex items-center gap-1">
-                        <Users className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>Gastos Compartidos (Tricount)</span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-1.5 text-[10.5px]">
-                        <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200">
-                          <span className="text-slate-400 block text-[9px]">Cuota / Persona:</span>
-                          <span className="font-mono font-bold text-slate-800">
-                            {formatCurrency(tricountData.fairShare, settleCurrency, settings.decimals)}
-                          </span>
-                        </div>
-                        <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200">
-                          <span className="text-slate-400 block text-[9px]">Total Compartido:</span>
-                          <span className="font-mono font-bold text-slate-800">
-                            {formatCurrency(tricountData.totalShared, settleCurrency, settings.decimals)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Settlement Transfers Cards */}
-                      {tricountData.transfers.length > 0 && (
-                        <div className="space-y-1 pt-1">
-                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                            Liquidación (Quién le paga a quién):
-                          </span>
-                          {tricountData.transfers.map((t, idx) => (
-                            <div
-                              key={idx}
-                              className="bg-indigo-50/90 border border-indigo-200 rounded-lg p-2 text-xs flex items-center justify-between"
-                            >
-                              <div className="flex items-center gap-1 font-bold text-indigo-950">
-                                <span>{t.from}</span>
-                                <ArrowRight className="w-3 h-3 text-indigo-500" />
-                                <span>{t.to}</span>
-                              </div>
-                              <span className="font-mono font-black text-indigo-900">
-                                ${formatNumber(t.inUSD, 2)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
 
                   {/* Receipt Footer */}
                   <div className="mt-3 pt-2 border-t border-dashed border-slate-200 text-center">
@@ -626,11 +449,11 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                 <div className="flex items-center justify-between text-xs font-bold text-slate-600">
                   <span className="uppercase tracking-tight">Código BASE64 (Importación Rápida)</span>
                   <span className="text-[10px] text-slate-400 font-mono">
-                    {sheetBase64.length} caracteres
+                    {base64Code.length} caracteres
                   </span>
                 </div>
                 <div className="p-3 bg-slate-900 rounded-xl text-emerald-400 font-mono text-xs break-all max-h-48 overflow-y-auto border border-slate-800 select-all scrollbar-thin">
-                  {sheetBase64}
+                  {base64Code}
                 </div>
               </div>
 
@@ -666,11 +489,11 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                 <div className="flex items-center justify-between text-xs font-bold text-slate-600">
                   <span className="uppercase tracking-tight">Estructura JSON Completa</span>
                   <span className="text-[10px] text-slate-400 font-mono">
-                    {sheetJsonString.length} caracteres
+                    {rawJsonData.length} caracteres
                   </span>
                 </div>
                 <pre className="p-3 bg-slate-900 rounded-xl text-cyan-300 font-mono text-xs whitespace-pre overflow-x-auto max-h-48 border border-slate-800 scrollbar-thin select-all">
-                  {sheetJsonString}
+                  {rawJsonData}
                 </pre>
               </div>
 
