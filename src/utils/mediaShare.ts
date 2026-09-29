@@ -39,6 +39,7 @@ export function dataUrlToBlob(dataUrl: string): Blob {
 
 /**
  * Captures any DOM element into PNG dataUrl and Blob with mobile-safe optimizations
+ * Ensures full height from start to finish without clipping long receipts or accounts
  */
 export async function captureElementToPng(
   elem: HTMLElement
@@ -48,15 +49,53 @@ export async function captureElementToPng(
   // Let UI paint and layout settle
   await new Promise((resolve) => setTimeout(resolve, 60));
 
+  // Find scrollable parents and record their scroll positions
+  const scrollableParents: Array<{ node: HTMLElement; top: number; left: number }> = [];
+  let curr: HTMLElement | null = elem.parentElement;
+  while (curr && curr !== document.body) {
+    if (curr.scrollTop > 0 || curr.scrollLeft > 0) {
+      scrollableParents.push({ node: curr, top: curr.scrollTop, left: curr.scrollLeft });
+      curr.scrollTop = 0;
+      curr.scrollLeft = 0;
+    }
+    curr = curr.parentElement;
+  }
+
+  // Calculate full natural dimensions
+  const fullWidth = Math.max(elem.scrollWidth, elem.offsetWidth, 360);
+  const fullHeight = Math.max(elem.scrollHeight, elem.offsetHeight);
+
+  // Adaptive pixelRatio to prevent hitting Android's max canvas limit (4096px)
+  let idealPixelRatio = 2;
+  if (fullHeight * idealPixelRatio > 3800) {
+    idealPixelRatio = 1.5;
+  }
+  if (fullHeight * idealPixelRatio > 3800) {
+    idealPixelRatio = 1.2;
+  }
+  if (fullHeight * idealPixelRatio > 3800) {
+    idealPixelRatio = 1.0;
+  }
+
   try {
-    // Attempt 1: High definition (pixelRatio 2) with skipFonts to avoid CORS issues
+    // Attempt 1: Full-height capture with adaptive resolution
     const dataUrl = await toPng(elem, {
-      pixelRatio: 2,
+      pixelRatio: idealPixelRatio,
+      width: fullWidth,
+      height: fullHeight,
       backgroundColor: '#ffffff',
       cacheBust: true,
       skipFonts: true,
+      style: {
+        width: `${fullWidth}px`,
+        height: `${fullHeight}px`,
+        maxHeight: 'none',
+        minHeight: `${fullHeight}px`,
+        overflow: 'visible',
+        transform: 'none',
+        margin: '0 auto',
+      },
       filter: (domNode) => {
-        // Exclude interactive modal backdrop or buttons if inside
         if (domNode instanceof HTMLElement && domNode.classList?.contains('no-export')) {
           return false;
         }
@@ -67,14 +106,25 @@ export async function captureElementToPng(
     const blob = dataUrlToBlob(dataUrl);
     return { dataUrl, blob };
   } catch (err1) {
-    console.warn('Initial HD capture failed, retrying with standard pixelRatio...', err1);
+    console.warn('Adaptive HD capture failed, retrying with 1x ratio...', err1);
     try {
-      // Attempt 2: Standard resolution
+      // Attempt 2: Standard 1x ratio fallback
       const dataUrl = await toPng(elem, {
-        pixelRatio: 1.5,
+        pixelRatio: 1.0,
+        width: fullWidth,
+        height: fullHeight,
         backgroundColor: '#ffffff',
         cacheBust: true,
         skipFonts: true,
+        style: {
+          width: `${fullWidth}px`,
+          height: `${fullHeight}px`,
+          maxHeight: 'none',
+          minHeight: `${fullHeight}px`,
+          overflow: 'visible',
+          transform: 'none',
+          margin: '0 auto',
+        },
       });
       const blob = dataUrlToBlob(dataUrl);
       return { dataUrl, blob };
@@ -82,6 +132,12 @@ export async function captureElementToPng(
       console.error('Final image capture failure:', err2);
       return null;
     }
+  } finally {
+    // Restore previous scroll positions so user preview is not displaced
+    scrollableParents.forEach(({ node, top, left }) => {
+      node.scrollTop = top;
+      node.scrollLeft = left;
+    });
   }
 }
 

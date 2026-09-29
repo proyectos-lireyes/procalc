@@ -361,11 +361,11 @@ export const ShareTapeAccountModal: React.FC<ShareTapeAccountModalProps> = ({
           {activeTab === 'image' ? (
             <div className="flex flex-col items-center gap-3">
               {/* Scrollable Container with Complete Receipt Canvas inside */}
-              <div className="w-full flex justify-center bg-slate-100 p-2 sm:p-3 rounded-xl border border-slate-200 overflow-y-auto max-h-[55vh] scrollbar-thin">
+              <div className="w-full bg-slate-100 p-2 sm:p-3 rounded-xl border border-slate-200 overflow-y-auto max-h-[58vh] touch-pan-y overscroll-contain">
                 <div
                   ref={receiptRef}
-                  className="bg-white rounded-xl shadow-xs border border-slate-200 p-4 w-full max-w-[380px] text-slate-800 font-sans h-auto"
-                  style={{ minWidth: '320px' }}
+                  className="bg-white rounded-xl shadow-xs border border-slate-200 p-4 w-full max-w-[380px] mx-auto text-slate-800 font-sans h-auto"
+                  style={{ minWidth: '300px' }}
                 >
                   {/* Receipt Header */}
                   <div className="text-center border-b border-dashed border-slate-300 pb-3 mb-3">
