@@ -22,7 +22,7 @@ import {
   AppSettings,
 } from '../types';
 import { encodeSheetShare } from '../utils/shareImporter';
-import { formatCurrency, formatNumber } from '../utils/currency';
+import { formatCurrency, formatNumber, convertCurrency, convertToVES } from '../utils/currency';
 import {
   captureElementToPng,
   copyImageMediaToClipboard,
@@ -127,19 +127,19 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
       const c = cCopy[cIdx];
       const amt = Math.min(d.balance, c.balance);
       if (amt > 0.001) {
-        const inVES =
-          settleCurrency === 'VES'
-            ? amt
-            : amt * (rates[settleCurrency]?.rateToVES || 1);
+        const inVES = convertToVES(amt, settleCurrency, rates);
+        const inUSD = convertCurrency(amt, settleCurrency, 'USD', rates);
+        const inEUR = convertCurrency(amt, settleCurrency, 'EUR', rates);
+        const inUSDT = convertCurrency(amt, settleCurrency, 'USDT', rates);
 
         transfers.push({
           from: d.name,
           to: c.name,
           amount: amt,
           inVES,
-          inUSD: inVES / (rates.USD?.rateToVES || 1),
-          inEUR: inVES / (rates.EUR?.rateToVES || 1),
-          inUSDT: inVES / (rates.USDT?.rateToVES || 1),
+          inUSD,
+          inEUR,
+          inUSDT,
         });
       }
       d.balance -= amt;
@@ -573,25 +573,40 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Settlement Transfers Cards */}
+                      {/* Settlement Transfers Cards in ALL 4 Currencies */}
                       {tricountData.transfers.length > 0 && (
-                        <div className="space-y-1 pt-1">
+                        <div className="space-y-1.5 pt-1">
                           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                            Liquidación (Quién le paga a quién):
+                            ¿Quién le paga a quién?
                           </span>
                           {tricountData.transfers.map((t, idx) => (
                             <div
                               key={idx}
-                              className="bg-indigo-50/90 border border-indigo-200 rounded-lg p-2 text-xs flex items-center justify-between"
+                              className="p-2 rounded-lg border border-slate-200 bg-slate-50 flex flex-col gap-1 text-xs"
                             >
-                              <div className="flex items-center gap-1 font-bold text-indigo-950">
-                                <span>{t.from}</span>
-                                <ArrowRight className="w-3 h-3 text-indigo-500" />
-                                <span>{t.to}</span>
+                              <div className="flex items-center justify-between font-bold">
+                                <span className="text-rose-700">{t.from}</span>
+                                <div className="flex items-center gap-1 text-slate-400 text-[10px]">
+                                  <span>le paga a</span>
+                                  <ArrowRight className="w-3 h-3 text-slate-600" />
+                                </div>
+                                <span className="text-emerald-700">{t.to}</span>
                               </div>
-                              <span className="font-mono font-black text-indigo-900">
-                                ${formatNumber(t.inUSD, 2)}
-                              </span>
+
+                              <div className="grid grid-cols-4 gap-1 text-[10px] font-mono text-center font-bold">
+                                <div className="bg-white p-1 rounded border border-blue-200 text-blue-800" title="Dólares ($)">
+                                  $ {formatNumber(t.inUSD, 2)}
+                                </div>
+                                <div className="bg-white p-1 rounded border border-emerald-200 text-emerald-800" title="Bolívares (Bs)">
+                                  Bs {formatNumber(t.inVES, 2)}
+                                </div>
+                                <div className="bg-white p-1 rounded border border-amber-200 text-amber-800" title="Tether (USDT)">
+                                  {formatNumber(t.inUSDT, 2)}
+                                </div>
+                                <div className="bg-white p-1 rounded border border-teal-200 text-teal-800" title="Euros (€)">
+                                  € {formatNumber(t.inEUR, 2)}
+                                </div>
+                              </div>
                             </div>
                           ))}
                         </div>
