@@ -9,11 +9,18 @@ import {
   Code2,
   FileCode,
   Loader2,
+  AlertCircle,
+  Sparkles,
 } from 'lucide-react';
-import { toPng, toBlob } from 'html-to-image';
 import { TapeRow } from './TapeCalculatorModal';
 import { encodeCalcAccountShare } from '../utils/shareImporter';
 import { formatNumber } from '../utils/currency';
+import {
+  captureElementToPng,
+  copyImageMediaToClipboard,
+  shareImageMedia,
+  downloadImageMedia,
+} from '../utils/mediaShare';
 
 export interface TapeRowItem {
   id: string;
@@ -48,6 +55,10 @@ export const ShareTapeAccountModal: React.FC<ShareTapeAccountModalProps> = ({
   const [copiedBase64, setCopiedBase64] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<{
+    text: string;
+    type: 'success' | 'info' | 'error';
+  } | null>(null);
 
   const receiptRef = useRef<HTMLDivElement>(null);
 
@@ -92,95 +103,115 @@ export const ShareTapeAccountModal: React.FC<ShareTapeAccountModalProps> = ({
     2
   );
 
-  // Generate Image Blob capturing full height
-  const handleGenerateImage = async (): Promise<Blob | null> => {
-    if (!receiptRef.current) return null;
+  const accountFileName = `${accountName.replace(/\s+/g, '_')}_cuenta.png`;
+
+  // Copy Image to Clipboard (Cross-platform Android / Web)
+  const handleCopyImage = async () => {
+    if (!receiptRef.current) return;
     setIsGenerating(true);
+    setStatusMessage(null);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      const elem = receiptRef.current;
-      const blob = await toBlob(elem, {
-        pixelRatio: 2.5,
-        backgroundColor: '#ffffff',
-        width: elem.offsetWidth || elem.scrollWidth,
-        height: elem.offsetHeight || elem.scrollHeight,
+      const captured = await captureElementToPng(receiptRef.current);
+      if (!captured) {
+        setStatusMessage({ text: 'Error al procesar la imagen del comprobante.', type: 'error' });
+        return;
+      }
+
+      const res = await copyImageMediaToClipboard({
+        dataUrl: captured.dataUrl,
+        blob: captured.blob,
+        fileName: accountFileName,
+        fallbackText: `Cuenta: ${accountName} (Total: $${formatNumber(grandTotal, 2)})`,
       });
-      return blob;
+
+      if (res.success) {
+        setCopiedImage(true);
+        setStatusMessage({
+          text: '¡Imagen copiada al portapapeles! Lista para pegar en WhatsApp o chats.',
+          type: 'success',
+        });
+        setTimeout(() => setCopiedImage(false), 3000);
+      } else {
+        setStatusMessage({
+          text: 'Portapapeles no soportado directamente. Se abrió la opción para compartir.',
+          type: 'info',
+        });
+      }
     } catch (err) {
-      console.error('Error generating image', err);
-      return null;
+      console.error('handleCopyImage failed:', err);
+      setStatusMessage({ text: 'Error al copiar la imagen.', type: 'error' });
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // Copy Image to Clipboard
-  const handleCopyImage = async () => {
-    try {
-      const blob = await handleGenerateImage();
-      if (!blob) return;
-
-      if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
-        await navigator.clipboard.write([
-          new ClipboardItem({
-            'image/png': blob,
-          }),
-        ]);
-        setCopiedImage(true);
-        setTimeout(() => setCopiedImage(false), 2500);
-      } else {
-        handleDownloadImage();
-      }
-    } catch (err) {
-      console.error('Clipboard image copy failed, triggering share/download', err);
-      handleShareImage();
-    }
-  };
-
-  // Share Image via Web Share API
+  // Share Image via Android Intent / Web Share API
   const handleShareImage = async () => {
+    if (!receiptRef.current) return;
+    setIsGenerating(true);
+    setStatusMessage(null);
     try {
-      const blob = await handleGenerateImage();
-      if (!blob) return;
+      const captured = await captureElementToPng(receiptRef.current);
+      if (!captured) {
+        setStatusMessage({ text: 'Error al generar la imagen para compartir.', type: 'error' });
+        return;
+      }
 
-      const file = new File([blob], `${accountName.replace(/\s+/g, '_')}_cuenta.png`, {
-        type: 'image/png',
+      const res = await shareImageMedia({
+        dataUrl: captured.dataUrl,
+        blob: captured.blob,
+        title: accountName,
+        text: `Comprobante de cuenta: ${accountName} (Total: $${formatNumber(grandTotal, 2)})`,
+        fileName: accountFileName,
       });
 
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          files: [file],
-          title: accountName,
-          text: `Comprobante de cuenta: ${accountName} (Total: $${formatNumber(grandTotal, 2)})`,
+      if (res.success && res.method !== 'user-canceled') {
+        setStatusMessage({
+          text: res.method === 'native-gallery' || res.method === 'web-download'
+            ? '¡Imagen descargada con éxito!'
+            : '¡Compartiendo comprobante!',
+          type: 'success',
         });
-      } else {
-        handleDownloadImage();
       }
     } catch (err) {
-      console.warn('Share image aborted or unsupported', err);
-      handleDownloadImage();
+      console.error('handleShareImage failed:', err);
+      setStatusMessage({ text: 'No se pudo compartir la imagen.', type: 'error' });
+    } finally {
+      setIsGenerating(false);
     }
   };
 
-  // Download Image
+  // Download / Save Image to Gallery / Downloads
   const handleDownloadImage = async () => {
     if (!receiptRef.current) return;
     setIsGenerating(true);
+    setStatusMessage(null);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      const elem = receiptRef.current;
-      const dataUrl = await toPng(elem, {
-        pixelRatio: 2.5,
-        backgroundColor: '#ffffff',
-        width: elem.offsetWidth || elem.scrollWidth,
-        height: elem.offsetHeight || elem.scrollHeight,
+      const captured = await captureElementToPng(receiptRef.current);
+      if (!captured) {
+        setStatusMessage({ text: 'Error al generar imagen PNG.', type: 'error' });
+        return;
+      }
+
+      const res = await downloadImageMedia({
+        dataUrl: captured.dataUrl,
+        blob: captured.blob,
+        fileName: accountFileName,
       });
-      const link = document.createElement('a');
-      link.download = `${accountName.replace(/\s+/g, '_')}_cuenta.png`;
-      link.href = dataUrl;
-      link.click();
+
+      if (res.success) {
+        setStatusMessage({
+          text: res.method === 'native-gallery'
+            ? '¡Guardado con éxito en tu Galería de Fotos (Pictures/CalculadoraMultidivisa)!'
+            : '¡Archivo PNG descargado exitosamente!',
+          type: 'success',
+        });
+      } else {
+        setStatusMessage({ text: 'Error al guardar la imagen PNG.', type: 'error' });
+      }
     } catch (err) {
-      console.error('Error downloading image', err);
+      console.error('handleDownloadImage failed:', err);
+      setStatusMessage({ text: 'Error al descargar la imagen.', type: 'error' });
     } finally {
       setIsGenerating(false);
     }
@@ -441,6 +472,28 @@ export const ShareTapeAccountModal: React.FC<ShareTapeAccountModalProps> = ({
                   <span>Descargar PNG</span>
                 </button>
               </div>
+
+              {/* Status & Feedback message */}
+              {statusMessage && (
+                <div
+                  className={`w-full p-2.5 rounded-lg text-xs flex items-center gap-2 border font-medium ${
+                    statusMessage.type === 'success'
+                      ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                      : statusMessage.type === 'error'
+                      ? 'bg-rose-50 text-rose-900 border-rose-200'
+                      : 'bg-blue-50 text-blue-900 border-blue-200'
+                  }`}
+                >
+                  {statusMessage.type === 'success' ? (
+                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                  ) : statusMessage.type === 'error' ? (
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  ) : (
+                    <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
+                  )}
+                  <span>{statusMessage.text}</span>
+                </div>
+              )}
             </div>
           ) : activeTab === 'base64' ? (
             /* TAB 2: BASE64 */

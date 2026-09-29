@@ -211,12 +211,14 @@ const KeyButton: React.FC<KeyButtonProps> = ({
           )}
           {alphaLabel ? (
             <span
-              className={`truncate max-w-[50%] font-mono tracking-tighter ml-auto font-black flex items-center gap-0.5 ${
-                isReserved ? 'text-emerald-800' : 'text-emerald-700'
+              className={`truncate max-w-[55%] font-mono tracking-tighter ml-auto font-black flex items-center gap-0.5 ${
+                isReserved
+                  ? 'text-emerald-950 bg-emerald-100/90 border border-emerald-300/80 px-1 rounded-[3px] text-[7.5px]'
+                  : 'text-emerald-700'
               }`}
-              title={isReserved ? `Variable Reservada: ${alphaLabel}` : `Alpha: ${alphaLabel}`}
+              title={isReserved ? `Variable Reservada del Sistema: ${alphaLabel}` : `Alpha: ${alphaLabel}`}
             >
-              {isReserved && <span className="text-[6.5px]">🔒</span>}
+              {isReserved && <span className="text-[6px]">🔒</span>}
               {alphaLabel}
             </span>
           ) : (
