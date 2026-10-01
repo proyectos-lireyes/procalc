@@ -49,29 +49,14 @@ const STORAGE_SETTINGS_KEY = 'multicurrency_settings_v3';
 const STORAGE_HISTORY_KEY = 'multicurrency_history_v3';
 const STORAGE_TRICOUNT_GROUPS_KEY = 'procalc_tricount_groups_v1';
 
-const DEFAULT_TRICOUNT_GROUPS: TricountGroup[] = [
-  {
-    id: 'group_general',
-    name: 'Grupo Amigos Principal',
-    members: ['Yo', 'Carlos', 'Ana', 'María'],
-    description: 'Grupo general para salidas y gastos compartidos',
-    createdAt: Date.now(),
-  },
-  {
-    id: 'group_viaje',
-    name: 'Viaje y Vacaciones',
-    members: ['Yo', 'Amigo 1', 'Amigo 2', 'Amigo 3'],
-    description: 'Fondo para viajes y paseos',
-    createdAt: Date.now(),
-  },
-];
+const DEFAULT_TRICOUNT_GROUPS: TricountGroup[] = [];
 
 const INITIAL_SHEET: Sheet = {
   id: 'sheet_principal',
   title: 'Cuenta 1',
   description: 'Hoja de cálculos multimoneda',
   isTricountActive: false,
-  members: ['Yo', 'Amigo 1'],
+  members: ['Yo'],
   variables: [],
   rows: [
     {
@@ -131,7 +116,17 @@ export default function App() {
       const raw = localStorage.getItem(STORAGE_SHEETS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((s: Sheet) => {
+            const cleanedMembers = (s.members || ['Yo']).filter(
+              (m: string) => !m.toLowerCase().startsWith('amigo')
+            );
+            return {
+              ...s,
+              members: cleanedMembers.length > 0 ? cleanedMembers : ['Yo'],
+            };
+          });
+        }
       }
     } catch (e) {
       console.error(e);
@@ -192,7 +187,15 @@ export default function App() {
       const raw = localStorage.getItem(STORAGE_TRICOUNT_GROUPS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.filter(
+            (g: TricountGroup) =>
+              g.id !== 'group_general' &&
+              g.id !== 'group_viaje' &&
+              !g.name.includes('Grupo Amigos Principal') &&
+              !g.name.includes('Viaje y Vacaciones')
+          );
+        }
       }
     } catch (e) {
       console.error(e);
@@ -789,7 +792,7 @@ export default function App() {
     setSheets((prev) =>
       prev.map((s) => {
         if (s.id !== activeSheetId) return s;
-        const currentMembers = s.members && s.members.length > 0 ? s.members : ['Yo', 'Amigo 1'];
+        const currentMembers = s.members && s.members.length > 0 ? s.members : ['Yo'];
         return {
           ...s,
           isTricountActive: isActive,

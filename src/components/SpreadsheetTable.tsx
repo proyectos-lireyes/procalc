@@ -264,7 +264,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   // Planificador de Viaje / Prepaid Stats
   const isPrepaidMode = sheet.tricountMode === 'prepaid';
   const members = useMemo(
-    () => (sheet.members && sheet.members.length > 0 ? sheet.members : ['Yo', 'Amigo 1']),
+    () => (sheet.members && sheet.members.length > 0 ? sheet.members : ['Yo']),
     [sheet.members]
   );
 
@@ -534,7 +534,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
     if (onToggleSheetTricount) {
       onToggleSheetTricount(nextState);
     } else if (onUpdateSheetMembers && nextState && members.length === 0) {
-      onUpdateSheetMembers(['Yo', 'Amigo 1']);
+      onUpdateSheetMembers(['Yo']);
     }
   };
 
@@ -815,7 +815,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-center sm:text-left">
               <div
                 onClick={() => {
-                  setOutsideTargetInput(String(sheet.prepaidConfig?.targetAmount || 500));
+                  setOutsideTargetInput(sheet.prepaidConfig?.targetAmount ? String(sheet.prepaidConfig.targetAmount) : '');
                   setOutsideTargetCurrency(plannerCurrency);
                   setIsEditingTargetOutside(true);
                 }}
@@ -2456,7 +2456,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                 onClick={() => {
                   const num = parseFloat(outsideTargetInput.replace(',', '.'));
                   if (!isNaN(num) && num > 0) {
-                    const currentConfig = sheet.prepaidConfig || createDefaultPrepaidConfig(500, 'USD');
+                    const currentConfig = sheet.prepaidConfig || createDefaultPrepaidConfig(0, 'USD');
                     const nextConfig = {
                       ...currentConfig,
                       targetAmount: num,
@@ -2537,7 +2537,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                   if (isPrepaidMode) {
                     if (onUpdatePrepaidConfig) {
                       onUpdatePrepaidConfig({
-                        ...(sheet.prepaidConfig || createDefaultPrepaidConfig(500, 'USD')),
+                        ...(sheet.prepaidConfig || createDefaultPrepaidConfig(0, 'USD')),
                         contributions: [],
                         customQuotas: {},
                       });

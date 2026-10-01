@@ -61,7 +61,7 @@ export function resolveMemberForContribution(
 }
 
 export function createDefaultPrepaidConfig(
-  targetAmount = 500,
+  targetAmount = 0,
   targetCurrency: Currency = 'USD'
 ): TricountPrepaidConfig {
   return {
@@ -78,7 +78,7 @@ export function calculatePrepaidTripStats(
   rates: RatesState,
   baseCurrency?: Currency
 ): PrepaidTripStats {
-  const targetAmount = config?.targetAmount ?? 500;
+  const targetAmount = config?.targetAmount ?? 0;
   const targetCurrency = config?.targetCurrency ?? 'USD';
   const effectiveBaseCurrency = baseCurrency || targetCurrency;
   const contributions = config?.contributions ?? [];

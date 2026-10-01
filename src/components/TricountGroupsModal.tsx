@@ -40,7 +40,7 @@ export const TricountGroupsModal: React.FC<TricountGroupsModalProps> = ({
   // Form states
   const [groupName, setGroupName] = useState('');
   const [groupDesc, setGroupDesc] = useState('');
-  const [membersList, setMembersList] = useState<string[]>(['Yo', 'Amigo 1']);
+  const [membersList, setMembersList] = useState<string[]>(['Yo']);
   const [newMemberInput, setNewMemberInput] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -55,7 +55,7 @@ export const TricountGroupsModal: React.FC<TricountGroupsModalProps> = ({
     setMembersList(
       currentSheet?.members && currentSheet.members.length > 0
         ? currentSheet.members
-        : ['Yo', 'Amigo 1']
+        : ['Yo']
     );
     setNewMemberInput('');
     setFormError(null);
@@ -103,7 +103,7 @@ export const TricountGroupsModal: React.FC<TricountGroupsModalProps> = ({
     setFormError(null);
     const trimmedName = groupName.trim();
     if (!trimmedName) {
-      setFormError('Ingresa un nombre para el grupo (ej: Familia, Viaje Mérida).');
+      setFormError('Ingresa un nombre para el grupo.');
       return;
     }
     if (membersList.length === 0) {
@@ -180,7 +180,7 @@ export const TricountGroupsModal: React.FC<TricountGroupsModalProps> = ({
                   type="text"
                   value={groupName}
                   onChange={(e) => setGroupName(e.target.value)}
-                  placeholder="ej: Amigos de Viaje, Familia, Roommates..."
+                  placeholder="Nombre del grupo..."
                   className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
                   autoFocus
                 />
@@ -194,7 +194,7 @@ export const TricountGroupsModal: React.FC<TricountGroupsModalProps> = ({
                   type="text"
                   value={groupDesc}
                   onChange={(e) => setGroupDesc(e.target.value)}
-                  placeholder="ej: Gastos compartidos de paseos y salidas"
+                  placeholder="Descripción breve..."
                   className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
                 />
               </div>

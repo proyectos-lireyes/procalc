@@ -121,7 +121,7 @@ export const TricountModal: React.FC<TricountModalProps> = ({
   }, [isOpen, sheet.id, sheet.tricountMode]);
 
   // Local state for participants
-  const [localMembers, setLocalMembers] = useState<string[]>(() => sheet.members || ['Yo', 'Amigo 1']);
+  const [localMembers, setLocalMembers] = useState<string[]>(() => sheet.members && sheet.members.length > 0 ? sheet.members : ['Yo']);
   const [newMemberName, setNewMemberName] = useState('');
   const [editingMember, setEditingMember] = useState<string | null>(null);
   const [editingNameVal, setEditingNameVal] = useState('');
@@ -140,21 +140,21 @@ export const TricountModal: React.FC<TricountModalProps> = ({
 
   // Keep local members in sync with sheet changes
   useEffect(() => {
-    setLocalMembers(sheet.members && sheet.members.length > 0 ? sheet.members : ['Yo', 'Amigo 1']);
+    setLocalMembers(sheet.members && sheet.members.length > 0 ? sheet.members : ['Yo']);
   }, [sheet.id, sheet.members]);
 
   const members = localMembers;
 
   // Prepaid Config State
   const [prepaidConfig, setPrepaidConfig] = useState<TricountPrepaidConfig>(() => {
-    return sheet.prepaidConfig || createDefaultPrepaidConfig(500, 'USD');
+    return sheet.prepaidConfig || createDefaultPrepaidConfig(0, 'USD');
   });
 
   useEffect(() => {
     if (sheet.prepaidConfig) {
       setPrepaidConfig(sheet.prepaidConfig);
     } else {
-      setPrepaidConfig(createDefaultPrepaidConfig(500, 'USD'));
+      setPrepaidConfig(createDefaultPrepaidConfig(0, 'USD'));
     }
   }, [sheet.id, sheet.prepaidConfig]);
 
@@ -198,7 +198,7 @@ export const TricountModal: React.FC<TricountModalProps> = ({
 
   // Target editing state
   const [isEditingTarget, setIsEditingTarget] = useState(false);
-  const [targetInputVal, setTargetInputVal] = useState(String(prepaidConfig.targetAmount || 500));
+  const [targetInputVal, setTargetInputVal] = useState(prepaidConfig.targetAmount ? String(prepaidConfig.targetAmount) : '');
   const [targetCurrencyVal, setTargetCurrencyVal] = useState<Currency>(prepaidConfig.targetCurrency || 'USD');
   const [targetSuccessMessage, setTargetSuccessMessage] = useState<string | null>(null);
 
@@ -839,7 +839,7 @@ export const TricountModal: React.FC<TricountModalProps> = ({
                         step="any"
                         value={targetInputVal}
                         onChange={(e) => setTargetInputVal(e.target.value)}
-                        placeholder="Ej: 500"
+                        placeholder="Monto meta..."
                         className="w-24 px-2 py-1 bg-white border border-blue-400 rounded-lg text-xs font-mono font-bold text-blue-950 focus:outline-none focus:ring-1 focus:ring-blue-500"
                         autoFocus
                       />
@@ -1549,7 +1549,7 @@ export const TricountModal: React.FC<TricountModalProps> = ({
                     type="text"
                     value={newMemberName}
                     onChange={(e) => setNewMemberName(e.target.value)}
-                    placeholder="Nombre del nuevo participante (ej: Carlos)"
+                    placeholder="Nombre del nuevo participante..."
                     className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                   <button
@@ -1951,7 +1951,7 @@ export const TricountModal: React.FC<TricountModalProps> = ({
                   required
                   value={saveGroupNameVal}
                   onChange={(e) => setSaveGroupNameVal(e.target.value)}
-                  placeholder="Ej: Viaje Cancún 2026, Amigos..."
+                  placeholder="Nombre del grupo..."
                   className="w-full bg-slate-50 border border-indigo-300 rounded-xl p-2.5 font-bold text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   autoFocus
                 />

@@ -65,9 +65,9 @@ export interface Sheet {
   isTricountActive?: boolean; // Whether tricount shared expenses is enabled for this account
   tricountMode?: TricountMode; // 'postpaid' (gastos compartidos) or 'prepaid' (planificación de viaje / abonos)
   tricountGroupId?: string; // ID of associated global Tricount group if linked
-  settledTransfers?: Record<string, boolean>; // e.g. "Pedro->Carlos": true -> paid / listo
-  settledDebtors?: Record<string, boolean>; // e.g. "Pedro": true -> all paid
-  partialSettlements?: Record<string, number>; // e.g. "Pedro->Carlos": 200 (monto abonado parcialmente)
+  settledTransfers?: Record<string, boolean>; // e.g. "Persona1->Persona2": true -> paid / listo
+  settledDebtors?: Record<string, boolean>; // e.g. "Persona1": true -> all paid
+  partialSettlements?: Record<string, number>; // e.g. "Persona1->Persona2": 200 (monto abonado parcialmente)
   prepaidConfig?: TricountPrepaidConfig;
   members?: string[]; // names of participants in this sheet
   rows: SheetRow[];
