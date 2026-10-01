@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   X,
   Share2,
@@ -13,6 +13,9 @@ import {
   ArrowRight,
   AlertCircle,
   Sparkles,
+  Plane,
+  CheckCircle2,
+  MessageSquare,
 } from 'lucide-react';
 import {
   Sheet,
@@ -20,9 +23,11 @@ import {
   ComputedSheetTotals,
   RatesState,
   AppSettings,
+  ExportImageScope,
 } from '../types';
 import { encodeSheetShare } from '../utils/shareImporter';
 import { formatCurrency, formatNumber, convertCurrency, convertToVES } from '../utils/currency';
+import { calculatePrepaidTripStats, formatPrepaidWhatsAppReport } from '../utils/tricountPrepaid';
 import {
   captureElementToPng,
   copyImageMediaToClipboard,
@@ -49,12 +54,20 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
   rates,
   settings,
 }) => {
-  // Exactly 3 tabs with 'image' as the 1st one
+  // All hooks declared unconditionally at the very top
   const [activeTab, setActiveTab] = useState<'image' | 'base64' | 'json'>('image');
+  const [imageScope, setImageScope] = useState<ExportImageScope>(() => {
+    if (sheet.tricountMode === 'prepaid') return 'planner';
+    if (sheet.isTricountActive || sheet.tricountMode === 'postpaid') return 'tricount';
+    return 'both';
+  });
   const [copiedImage, setCopiedImage] = useState(false);
   const [copiedBase64, setCopiedBase64] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
+  const [copiedWhatsAppText, setCopiedWhatsAppText] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [includeContributionsHistory, setIncludeContributionsHistory] = useState(false);
+  const [includeMulticurrencyRemaining, setIncludeMulticurrencyRemaining] = useState(true);
   const [statusMessage, setStatusMessage] = useState<{
     text: string;
     type: 'success' | 'info' | 'error';
@@ -62,19 +75,32 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
 
   const receiptRef = useRef<HTMLDivElement>(null);
 
-  if (!isOpen) return null;
-
-  const nowFormatted = new Date().toLocaleString('es-VE', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
-
   const members = sheet.members || [];
   const isTricountActive = Boolean(sheet.isTricountActive && members.length > 0);
   const settleCurrency = settings.displayCurrency;
 
-  // Compute Tricount statistics
-  const tricountData = (() => {
+  // Auto-select default tab when opening modal
+  useEffect(() => {
+    if (isOpen) {
+      if (sheet.tricountMode === 'prepaid') {
+        setImageScope('planner');
+      } else if (sheet.isTricountActive || sheet.tricountMode === 'postpaid') {
+        setImageScope('tricount');
+      } else {
+        setImageScope('both');
+      }
+    }
+  }, [isOpen, sheet.id, sheet.isTricountActive, sheet.tricountMode]);
+
+  const plannerCurrency = sheet.prepaidConfig?.targetCurrency || settings.displayCurrency;
+
+  // Compute Prepaid Trip Stats if active or configured
+  const prepaidData = useMemo(() => {
+    return calculatePrepaidTripStats(members, sheet.prepaidConfig, rates, plannerCurrency);
+  }, [members, sheet.prepaidConfig, rates, plannerCurrency]);
+
+  // Compute Tripcount statistics
+  const tricountData = useMemo(() => {
     if (!isTricountActive) return null;
 
     const paidByPerson: Record<string, number> = {};
@@ -155,7 +181,14 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
       balances,
       transfers,
     };
-  })();
+  }, [isTricountActive, members, computedRows, settleCurrency, rates]);
+
+  if (!isOpen) return null;
+
+  const nowFormatted = new Date().toLocaleString('es-VE', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
 
   // 1. Base64
   const sheetBase64 = encodeSheetShare(sheet);
@@ -172,8 +205,13 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
         title: sheet.title,
         currency: sheet.currency,
         isTricountActive: sheet.isTricountActive,
+        tricountMode: sheet.tricountMode,
         members: sheet.members,
         payer: sheet.payer,
+        prepaidConfig: sheet.prepaidConfig,
+        settledTransfers: sheet.settledTransfers,
+        settledDebtors: sheet.settledDebtors,
+        partialSettlements: sheet.partialSettlements,
         rows: sheet.rows,
         createdAt: sheet.createdAt,
       },
@@ -182,7 +220,7 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
     2
   );
 
-  const reportFileName = `${sheet.title.replace(/\s+/g, '_')}_reporte.png`;
+  const reportFileName = `${sheet.title.replace(/\s+/g, '_')}_${imageScope}_reporte.png`;
 
   // Copy Image to Clipboard (Cross-platform Android / Web)
   const handleCopyImage = async () => {
@@ -293,6 +331,27 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
       setStatusMessage({ text: 'Error al descargar la imagen.', type: 'error' });
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  // Copy WhatsApp Text Report
+  const handleCopyWhatsAppText = async () => {
+    if (!prepaidData) return;
+    const text = formatPrepaidWhatsAppReport(sheet.title, prepaidData, settings.decimals, {
+      includeHistory: includeContributionsHistory,
+      includeMulticurrencyRemaining: includeMulticurrencyRemaining,
+    });
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedWhatsAppText(true);
+      setStatusMessage({
+        text: '¡Reporte en texto para WhatsApp copiado al portapapeles!',
+        type: 'success',
+      });
+      setTimeout(() => setCopiedWhatsAppText(false), 2500);
+    } catch (err) {
+      console.error('Error copying text for WhatsApp', err);
+      setStatusMessage({ text: 'Error al copiar el texto.', type: 'error' });
     }
   };
 
@@ -439,197 +498,513 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
           {/* TAB 1: IMAGEN */}
           {activeTab === 'image' ? (
             <div className="flex flex-col items-center gap-3">
+              {/* Selector de qué incluir en la imagen: Ambos | Planner | Tricount */}
+              <div className="w-full bg-slate-50 p-2 rounded-xl border border-slate-200 space-y-1">
+                <div className="text-[11px] font-bold text-slate-700 flex items-center justify-between px-0.5">
+                  <span>¿Qué deseas incluir en la imagen?</span>
+                  <span className="text-[10px] text-slate-400 font-normal">Previsualización en vivo</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setImageScope('planner')}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                      imageScope === 'planner'
+                        ? 'bg-blue-600 text-white shadow-2xs'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>📊 Planner</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImageScope('tricount')}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                      imageScope === 'tricount'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>👥 Tripcount</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImageScope('both')}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                      imageScope === 'both'
+                        ? 'bg-indigo-600 text-white shadow-2xs'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>📑 Tabla Completa</span>
+                  </button>
+                </div>
+
+                {/* Opciones adicionales para el Planner: Historial y Multimoneda */}
+                {imageScope === 'planner' && (
+                  <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-200 text-[11px] flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setIncludeContributionsHistory((prev) => !prev)}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10.5px] border ${
+                        includeContributionsHistory
+                          ? 'bg-blue-100 text-blue-900 border-blue-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3.5 h-3.5 ${includeContributionsHistory ? 'text-blue-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>Historial de abonos</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIncludeMulticurrencyRemaining((prev) => !prev)}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10.5px] border ${
+                        includeMulticurrencyRemaining
+                          ? 'bg-blue-100 text-blue-900 border-blue-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3.5 h-3.5 ${includeMulticurrencyRemaining ? 'text-blue-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>Falta en 4 monedas</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {/* Scrollable Container with Complete Report Canvas inside */}
-              <div className="w-full bg-slate-100 p-2 sm:p-3 rounded-xl border border-slate-200 overflow-y-auto max-h-[58vh] touch-pan-y overscroll-contain">
+              <div className="w-full bg-slate-100/80 p-2 sm:p-4 rounded-2xl border border-slate-200 overflow-y-auto max-h-[58vh] touch-pan-y overscroll-contain flex justify-center">
                 <div
                   ref={receiptRef}
-                  className="bg-white rounded-xl shadow-xs border border-slate-200 p-4 w-full max-w-[400px] mx-auto text-slate-800 font-sans h-auto"
-                  style={{ minWidth: '300px' }}
+                  className="bg-white rounded-2xl shadow-md border border-slate-200/90 p-5 sm:p-6 w-full max-w-[420px] text-slate-800 font-sans space-y-4"
+                  style={{ minWidth: '320px' }}
                 >
-                  {/* Receipt Header */}
-                  <div className="text-center border-b border-dashed border-slate-300 pb-3 mb-3">
-                    <div className="inline-block px-2.5 py-0.5 rounded bg-indigo-50 text-indigo-800 text-[10px] font-black uppercase tracking-wider mb-1 border border-indigo-100">
-                      Reporte de Gastos y Cuenta
+                  {/* 1. Header del Comprobante */}
+                  <div className="text-center space-y-1 pb-3 border-b border-slate-100">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 text-blue-900 border border-blue-200/80 text-[10.5px] font-bold tracking-tight">
+                      <Sparkles className="w-3 h-3 text-blue-600" />
+                      <span>
+                        {imageScope === 'planner'
+                          ? 'Planificación & Colecta'
+                          : imageScope === 'tricount'
+                          ? 'Liquidación Tripcount'
+                          : 'Reporte de Cuentas'}
+                      </span>
                     </div>
-                    <h4 className="text-base font-extrabold text-slate-900 leading-tight">
+
+                    <h4 className="text-lg font-black text-slate-950 tracking-tight leading-snug pt-1">
                       {sheet.title}
                     </h4>
-                    <span className="text-[10px] text-slate-400 font-mono">
+
+                    <p className="text-[10.5px] text-slate-400 font-mono">
                       {nowFormatted}
-                    </span>
+                    </p>
                   </div>
 
-                  {/* Rates Bar */}
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 mb-3 text-[10px] space-y-0.5 font-medium text-slate-600">
-                    <div className="font-bold text-slate-700 uppercase tracking-wider text-[9px] mb-1">
-                      Tasas del Día (DolarAPI):
+                  {/* 2. Barra de Tasas del Día (Compacta y Elegante) */}
+                  <div className="bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2 text-[10.5px] font-mono flex items-center justify-between text-slate-700">
+                    <div className="flex items-center gap-1 font-bold text-slate-500 uppercase text-[9px]">
+                      <span>Tasas:</span>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span>USD (BCV):</span>
-                      <span className="font-mono font-bold text-slate-900">
-                        Bs. {formatNumber(rates.USD?.rateToVES || 0, 2)}
+                    <div className="flex items-center gap-2.5">
+                      <span>
+                        <strong className="text-slate-500 font-normal">USD</strong>{' '}
+                        <strong className="text-slate-900 font-bold">{formatNumber(rates.USD?.rateToVES || 0, 2)}</strong>
+                      </span>
+                      <span className="text-slate-300">•</span>
+                      <span>
+                        <strong className="text-slate-500 font-normal">USDT</strong>{' '}
+                        <strong className="text-slate-900 font-bold">{formatNumber(rates.USDT?.rateToVES || 0, 2)}</strong>
+                      </span>
+                      <span className="text-slate-300">•</span>
+                      <span>
+                        <strong className="text-slate-500 font-normal">EUR</strong>{' '}
+                        <strong className="text-slate-900 font-bold">{formatNumber(rates.EUR?.rateToVES || 0, 2)}</strong>
                       </span>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span>USDT (Paralelo):</span>
-                      <span className="font-mono font-bold text-slate-900">
-                        Bs. {formatNumber(rates.USDT?.rateToVES || 0, 2)}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>EUR (BCV):</span>
-                      <span className="font-mono font-bold text-slate-900">
-                        Bs. {formatNumber(rates.EUR?.rateToVES || 0, 2)}
-                      </span>
-                    </div>
                   </div>
 
-                  {/* Complete Rows Table */}
-                  <div className="space-y-1.5 text-xs mb-3">
-                    <div className="font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">
-                      Desglose de Gastos:
-                    </div>
-                    <table className="w-full border-collapse text-left">
-                      <thead>
-                        <tr className="border-b border-slate-200 text-[10px] font-bold text-slate-400 uppercase tracking-tight">
-                          <th className="py-1 px-1 w-5 text-center">#</th>
-                          <th className="py-1 px-1.5">Concepto</th>
-                          <th className="py-1 px-1.5 text-right">Monto Orig.</th>
-                          <th className="py-1 px-1.5 text-right">Equiv. $</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {computedRows.map((row, i) => (
-                          <tr key={row.id || i} className="text-[11px]">
-                            <td className="py-1.5 px-1 font-mono font-bold text-slate-400 text-center">
-                              {i + 1}
-                            </td>
-                            <td className="py-1.5 px-1.5 font-medium text-slate-700 max-w-[120px] break-words">
-                              {row.concept.trim() || <span className="text-slate-300">—</span>}
-                              {row.payer && isTricountActive && (
-                                <span className="text-[9px] text-indigo-600 block">
-                                  ({row.payer})
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-1.5 px-1.5 font-mono font-bold text-slate-900 text-right whitespace-nowrap">
-                              {formatCurrency(row.evaluatedValue, row.currency, settings.decimals)}
-                            </td>
-                            <td className="py-1.5 px-1.5 font-mono font-bold text-indigo-700 text-right whitespace-nowrap">
-                              ${formatNumber(row.equivalents.USD, 2)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* 4 Currency Totals Bar */}
-                  <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-2.5 mb-3 space-y-1 text-xs">
-                    <div className="font-black text-indigo-950 uppercase tracking-tight text-[10.5px] border-b border-indigo-200/60 pb-1 flex justify-between">
-                      <span>Totales Multimoneda</span>
-                      <span className="text-indigo-600">4 Divisas</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-x-2 gap-y-1 pt-1 font-mono text-[11px]">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-bold">Total $:</span>
-                        <span className="font-bold text-slate-900">${formatNumber(totals.netByCurrency.USD, 2)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-bold">Total EUR:</span>
-                        <span className="font-bold text-slate-900">€{formatNumber(totals.netByCurrency.EUR, 2)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-bold">Total USDT:</span>
-                        <span className="font-bold text-slate-900">{formatNumber(totals.netByCurrency.USDT, 2)}</span>
-                      </div>
-                      <div className="flex justify-between col-span-2 pt-1 border-t border-indigo-200/60">
-                        <span className="text-indigo-900 font-black">A PAGAR (Bs):</span>
-                        <span className="font-black text-indigo-900">Bs. {formatNumber(totals.netByCurrency.VES, 2)}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Tricount Section if Active */}
-                  {tricountData && (
-                    <div className="border-t border-dashed border-slate-300 pt-2.5 space-y-2 text-xs">
-                      <div className="font-black text-slate-800 uppercase tracking-tight text-[11px] flex items-center gap-1">
-                        <Users className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>Gastos Compartidos (Tricount)</span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-1.5 text-[10.5px]">
-                        <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200">
-                          <span className="text-slate-400 block text-[9px]">Cuota / Persona:</span>
-                          <span className="font-mono font-bold text-slate-800">
-                            {formatCurrency(tricountData.fairShare, settleCurrency, settings.decimals)}
+                  {/* 3. SECCIÓN PLANNER (Planificación & Colecta con Meta, Cuota p/p, Abonado, Falta y Desglose por Persona) */}
+                  {(imageScope === 'planner' || imageScope === 'both') && prepaidData && (
+                    <div className="space-y-3">
+                      {/* 4 Métricas Clave */}
+                      <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                        <div className="bg-blue-950 text-white p-2.5 rounded-xl border border-blue-800 text-center">
+                          <span className="text-blue-200 block text-[9px] font-bold uppercase">Meta Total</span>
+                          <span className="font-mono font-black text-white text-sm block mt-0.5">
+                            {formatCurrency(prepaidData.totalTargetInBase, plannerCurrency, 2)}
                           </span>
                         </div>
-                        <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200">
-                          <span className="text-slate-400 block text-[9px]">Total Compartido:</span>
-                          <span className="font-mono font-bold text-slate-800">
-                            {formatCurrency(tricountData.totalShared, settleCurrency, settings.decimals)}
+                        <div className="bg-blue-900 text-white p-2.5 rounded-xl border border-blue-800 text-center">
+                          <span className="text-blue-200 block text-[9px] font-bold uppercase">Cuota p/p</span>
+                          <span className="font-mono font-black text-blue-100 text-sm block mt-0.5">
+                            {formatCurrency(prepaidData.totalTargetInBase / (members.length || 1), plannerCurrency, 2)}
+                          </span>
+                        </div>
+                        <div className="bg-emerald-50 p-2.5 rounded-xl border border-emerald-200 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <span className="text-emerald-700 block text-[9px] font-bold uppercase">Abonado</span>
+                            <span className="text-[9px] font-extrabold px-1 rounded bg-emerald-400 text-slate-950">
+                              {prepaidData.progressPercent.toFixed(1)}%
+                            </span>
+                          </div>
+                          <span className="font-mono font-black text-emerald-800 text-sm block mt-0.5">
+                            {formatCurrency(prepaidData.totalCollectedInBase, plannerCurrency, 2)}
+                          </span>
+                        </div>
+                        <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200 text-center">
+                          <span className="text-amber-700 block text-[9px] font-bold uppercase">Falta por Reunir</span>
+                          <span className="font-mono font-black text-amber-800 text-sm block mt-0.5">
+                            {formatCurrency(prepaidData.totalRemainingInBase, plannerCurrency, 2)}
                           </span>
                         </div>
                       </div>
 
-                      {/* Settlement Transfers Cards in ALL 4 Currencies */}
-                      {tricountData.transfers.length > 0 && (
-                        <div className="space-y-1.5 pt-1">
-                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                            ¿Quién le paga a quién?
-                          </span>
-                          {tricountData.transfers.map((t, idx) => (
+                      {/* Barra de Progreso Global */}
+                      <div className="space-y-1">
+                        <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden p-0.5 border border-slate-200">
+                          <div
+                            className="bg-gradient-to-r from-blue-500 via-teal-400 to-emerald-500 h-full rounded-full transition-all duration-500"
+                            style={{ width: `${Math.min(100, Math.max(0, prepaidData.progressPercent))}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Desglose Elegante por Participante */}
+                      <div className="space-y-1.5 pt-1">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                          Participantes y Cuotas ({prepaidData.membersStats.length})
+                        </span>
+
+                        <div className="space-y-1.5">
+                          {prepaidData.membersStats.map((m, idx) => (
                             <div
                               key={idx}
-                              className="p-2 rounded-lg border border-slate-200 bg-slate-50 flex flex-col gap-1 text-xs"
+                              className={`p-2.5 rounded-xl border transition-colors space-y-1 ${
+                                m.isCompleted
+                                  ? 'bg-emerald-50/30 border-emerald-300'
+                                  : 'bg-slate-50 border-slate-200'
+                              }`}
                             >
-                              <div className="flex items-center justify-between font-bold">
-                                <span className="text-rose-700">{t.from}</span>
-                                <div className="flex items-center gap-1 text-slate-400 text-[10px]">
-                                  <span>le paga a</span>
-                                  <ArrowRight className="w-3 h-3 text-slate-600" />
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <div
+                                    className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${
+                                      m.isCompleted
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-blue-100 text-blue-800'
+                                    }`}
+                                  >
+                                    {m.name.substring(0, 2).toUpperCase()}
+                                  </div>
+                                  <span className="font-bold text-slate-900 text-xs truncate">
+                                    {m.name}
+                                  </span>
+                                  <span className="text-[9px] text-slate-400 font-mono">
+                                    ({m.contributionsCount} {m.contributionsCount === 1 ? 'abono' : 'abonos'})
+                                  </span>
                                 </div>
-                                <span className="text-emerald-700">{t.to}</span>
+
+                                {m.isCompleted ? (
+                                  <span className="inline-flex items-center gap-0.5 text-emerald-800 font-black text-[9px] bg-emerald-100 px-1.5 py-0.2 rounded border border-emerald-300">
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                    ¡Listo! (100%)
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] font-bold font-mono text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded">
+                                    Falta: {formatCurrency(m.remainingInBase, plannerCurrency, 2)}
+                                  </span>
+                                )}
                               </div>
 
-                              <div className="grid grid-cols-4 gap-1 text-[10px] font-mono text-center font-bold">
-                                <div className="bg-white p-1 rounded border border-blue-200 text-blue-800" title="Dólares ($)">
-                                  $ {formatNumber(t.inUSD, 2)}
-                                </div>
-                                <div className="bg-white p-1 rounded border border-emerald-200 text-emerald-800" title="Bolívares (Bs)">
-                                  Bs {formatNumber(t.inVES, 2)}
-                                </div>
-                                <div className="bg-white p-1 rounded border border-amber-200 text-amber-800" title="Tether (USDT)">
-                                  {formatNumber(t.inUSDT, 2)}
-                                </div>
-                                <div className="bg-white p-1 rounded border border-teal-200 text-teal-800" title="Euros (€)">
-                                  € {formatNumber(t.inEUR, 2)}
-                                </div>
+                              <div className="flex items-center justify-between text-[10px] text-slate-600 font-mono">
+                                <span>
+                                  Abonó: <strong className="text-emerald-700 font-bold">{formatCurrency(m.collectedInBase, plannerCurrency, 2)}</strong> / {formatCurrency(m.quotaInBase, plannerCurrency, 2)}
+                                </span>
+                                <span className="font-bold text-blue-700">{m.percent}%</span>
                               </div>
+
+                              {/* Desglose Multimoneda de lo que le falta */}
+                              {!m.isCompleted && includeMulticurrencyRemaining && (
+                                <div className="grid grid-cols-2 gap-1 mt-1.5 pt-1.5 border-t border-slate-200/80 text-[9px] font-mono bg-white/90 rounded-lg p-1.5 border border-slate-200 shadow-2xs">
+                                  <div className="flex items-center justify-between text-slate-600">
+                                    <span className="font-bold text-slate-500">USD:</span>
+                                    <span className="font-bold text-slate-900">${formatNumber(m.remainingInAllCurrencies.USD, 2)}</span>
+                                  </div>
+                                  <div className="flex items-center justify-between text-slate-600">
+                                    <span className="font-bold text-slate-500">VES:</span>
+                                    <span className="font-bold text-emerald-700">Bs {formatNumber(m.remainingInAllCurrencies.VES, 2)}</span>
+                                  </div>
+                                  <div className="flex items-center justify-between text-slate-600">
+                                    <span className="font-bold text-slate-500">USDT:</span>
+                                    <span className="font-bold text-amber-700">{formatNumber(m.remainingInAllCurrencies.USDT, 2)}</span>
+                                  </div>
+                                  <div className="flex items-center justify-between text-slate-600">
+                                    <span className="font-bold text-slate-500">EUR:</span>
+                                    <span className="font-bold text-teal-700">€{formatNumber(m.remainingInAllCurrencies.EUR, 2)}</span>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           ))}
+                        </div>
+                      </div>
+
+                      {/* Historial de Abonos Registrados (Opcional con un click) */}
+                      {includeContributionsHistory && prepaidData.contributions.length > 0 && (
+                        <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                            Historial de Abonos Registrados ({prepaidData.contributions.length})
+                          </span>
+                          <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5">
+                            {prepaidData.contributions.map((c) => (
+                              <div
+                                key={c.id}
+                                className="bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-[10px] flex items-center justify-between gap-1.5"
+                              >
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1 font-semibold text-slate-800">
+                                    <span>{c.member}</span>
+                                    {c.note && <span className="text-slate-400 italic truncate font-normal">"{c.note}"</span>}
+                                  </div>
+                                  <span className="text-[9px] text-slate-400 font-mono block">
+                                    {new Date(c.date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                                <span className="font-mono font-bold text-slate-900 shrink-0">
+                                  {formatCurrency(c.amount, c.currency, 2)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>
                   )}
 
-                  {/* Receipt Footer */}
-                  <div className="mt-3 pt-2 border-t border-dashed border-slate-200 text-center">
-                    <span className="text-[9px] text-slate-400 font-medium">
-                      Calculado con ProCalc
-                    </span>
+                  {/* 4. SECCIÓN TABLA COMPLETA (Filas y Totales Multidivisa) */}
+                  {imageScope === 'both' && (
+                    <div className="space-y-3">
+                      {/* Encabezado de la tabla */}
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                          Desglose de Gastos ({computedRows.length} {computedRows.length === 1 ? 'ítem' : 'ítems'})
+                        </span>
+                        <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                          <table className="w-full border-collapse text-left text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-tight">
+                                <th className="py-1.5 px-2 w-6 text-center">#</th>
+                                <th className="py-1.5 px-2">Descripción</th>
+                                <th className="py-1.5 px-2 text-right">Monto</th>
+                                <th className="py-1.5 px-2 text-right">Equiv. $</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 bg-white">
+                              {computedRows.map((row, i) => (
+                                <tr key={row.id || i} className={i % 2 === 1 ? 'bg-slate-50/50' : ''}>
+                                  <td className="py-2 px-2 font-mono font-bold text-slate-400 text-center text-[10px]">
+                                    {i + 1}
+                                  </td>
+                                  <td className="py-2 px-2 text-[11px] text-slate-800 font-medium max-w-[140px] break-words">
+                                    {row.concept.trim() || <span className="text-slate-300">—</span>}
+                                    {row.payer && isTricountActive && (
+                                      <span className="text-[9px] text-indigo-600 block font-semibold">
+                                        (Pagó: {row.payer})
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-2 font-mono font-bold text-slate-900 text-right whitespace-nowrap text-[11px]">
+                                    {formatCurrency(row.evaluatedValue, row.currency, settings.decimals)}
+                                  </td>
+                                  <td className="py-2 px-2 font-mono font-bold text-indigo-700 text-right whitespace-nowrap text-[11px]">
+                                    ${formatNumber(row.equivalents.USD, 2)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* Tarjeta de Totales Multimoneda */}
+                      <div className="bg-gradient-to-br from-indigo-900 to-slate-900 text-white rounded-xl p-3.5 shadow-xs space-y-2">
+                        <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-200">
+                            Total General a Pagar
+                          </span>
+                          <span className="font-mono text-[10px] text-indigo-300 font-semibold">
+                            4 Monedas
+                          </span>
+                        </div>
+
+                        {/* Principal: Bolívares */}
+                        <div className="flex items-baseline justify-between pt-0.5">
+                          <span className="text-xs font-bold text-indigo-100">Total Bs:</span>
+                          <span className="text-lg font-black font-mono tracking-tight text-white">
+                            Bs. {formatNumber(totals.netByCurrency.VES, 2)}
+                          </span>
+                        </div>
+
+                        {/* Secundarios: $, USDT, EUR */}
+                        <div className="grid grid-cols-3 gap-1 pt-1.5 border-t border-white/10 font-mono text-[10.5px]">
+                          <div className="bg-white/10 rounded-lg p-1.5 text-center">
+                            <span className="text-[9px] text-indigo-200 block uppercase">Dólares</span>
+                            <span className="font-bold text-white">${formatNumber(totals.netByCurrency.USD, 2)}</span>
+                          </div>
+                          <div className="bg-white/10 rounded-lg p-1.5 text-center">
+                            <span className="text-[9px] text-indigo-200 block uppercase">USDT</span>
+                            <span className="font-bold text-white">{formatNumber(totals.netByCurrency.USDT, 2)}</span>
+                          </div>
+                          <div className="bg-white/10 rounded-lg p-1.5 text-center">
+                            <span className="text-[9px] text-indigo-200 block uppercase">Euros</span>
+                            <span className="font-bold text-white">€{formatNumber(totals.netByCurrency.EUR, 2)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 5. SECCIÓN TRIPCOUNT POSTPAGO (Gastos Compartidos & Liquidación) */}
+                  {(imageScope === 'tricount' || imageScope === 'both') && tricountData && (
+                    <div className="space-y-3 pt-2 border-t border-slate-100">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-slate-900 font-black text-xs uppercase tracking-tight">
+                          <span className="p-1 rounded bg-emerald-600 text-white">
+                            <Users className="w-3 h-3" />
+                          </span>
+                          <span>Liquidación Tripcount</span>
+                        </div>
+                        <span className="text-[10px] font-bold font-mono text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                          {members.length} personas
+                        </span>
+                      </div>
+
+                      {/* Métricas de cuota justa */}
+                      <div className="grid grid-cols-2 gap-2 text-[11px]">
+                        <div className="bg-slate-50 p-2 rounded-xl border border-slate-200 text-center">
+                          <span className="text-slate-400 block text-[9px] font-bold uppercase">Cuota Justa / Persona</span>
+                          <span className="font-mono font-black text-slate-900 text-xs sm:text-sm block mt-0.5">
+                            {formatCurrency(tricountData.fairShare, settleCurrency, settings.decimals)}
+                          </span>
+                        </div>
+                        <div className="bg-slate-50 p-2 rounded-xl border border-slate-200 text-center">
+                          <span className="text-slate-400 block text-[9px] font-bold uppercase">Gasto Total Compartido</span>
+                          <span className="font-mono font-black text-slate-900 text-xs sm:text-sm block mt-0.5">
+                            {formatCurrency(tricountData.totalShared, settleCurrency, settings.decimals)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Resumen de quién pagó qué */}
+                      <div className="space-y-1.5 pt-1">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                          Aportes de Gastos por Persona
+                        </span>
+                        <div className="space-y-1">
+                          {members.map((name) => {
+                            const paid = tricountData.paidByPerson[name] || 0;
+                            const bal = tricountData.balances[name] || 0;
+                            return (
+                              <div
+                                key={name}
+                                className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs flex items-center justify-between"
+                              >
+                                <span className="font-bold text-slate-800">{name}</span>
+                                <div className="text-right font-mono text-[11px]">
+                                  <span className="text-slate-500 mr-2">Pagó: {formatCurrency(paid, settleCurrency, 2)}</span>
+                                  {bal > 0.009 ? (
+                                    <span className="text-emerald-700 font-bold">Le deben +{formatCurrency(bal, settleCurrency, 2)}</span>
+                                  ) : bal < -0.009 ? (
+                                    <span className="text-rose-700 font-bold">Debe -{formatCurrency(-bal, settleCurrency, 2)}</span>
+                                  ) : (
+                                    <span className="text-slate-500 font-bold">Al día</span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Transferencias */}
+                      {tricountData.transfers.length > 0 && (
+                        <div className="space-y-1.5 pt-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                            Transferencias para Saldar Cuentas
+                          </span>
+
+                          <div className="space-y-1.5">
+                            {tricountData.transfers.map((t, idx) => {
+                              const transferKey = `${t.from}->${t.to}`;
+                              const isSettled = Boolean(
+                                sheet.settledTransfers?.[transferKey] ||
+                                sheet.settledDebtors?.[t.from]
+                              );
+
+                              return (
+                                <div
+                                  key={idx}
+                                  className={`p-2.5 rounded-xl border space-y-1.5 transition-colors ${
+                                    isSettled
+                                      ? 'bg-emerald-50/40 border-emerald-300'
+                                      : 'bg-slate-50 border-slate-200'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between font-bold">
+                                    <div className="flex items-center gap-1.5 min-w-0 text-xs">
+                                      <span className={isSettled ? 'text-slate-400 line-through' : 'text-rose-700 font-bold'}>
+                                        {t.from}
+                                      </span>
+                                      <span className="text-slate-400 text-[10px] font-normal">➔</span>
+                                      <span className="text-emerald-800 font-bold">{t.to}</span>
+                                    </div>
+
+                                    {isSettled ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[9px] font-black uppercase tracking-wider shadow-2xs">
+                                        <CheckCircle2 className="w-2.5 h-2.5" />
+                                        Listo / Ya pagó
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[9px] font-bold">
+                                        Pendiente
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="bg-white p-1.5 rounded-lg border border-slate-200/80 font-mono text-[10px] flex items-center justify-between px-2 font-bold">
+                                    <span className="text-slate-900">${formatNumber(t.inUSD, 2)}</span>
+                                    <span className="text-slate-300">•</span>
+                                    <span className="text-emerald-700">Bs. {formatNumber(t.inVES, 2)}</span>
+                                    <span className="text-slate-300">•</span>
+                                    <span className="text-amber-700">{formatNumber(t.inUSDT, 2)} USDT</span>
+                                    <span className="text-slate-300">•</span>
+                                    <span className="text-teal-700">€{formatNumber(t.inEUR, 2)}</span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 6. Footer de Marca Elegante */}
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[9px] text-slate-400 font-mono">
+                    <span>ProCalc • Multidivisa</span>
+                    <span>Reporte Oficial</span>
                   </div>
                 </div>
               </div>
 
-              {/* Action Buttons for Image */}
-              <div className="w-full grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+              {/* Action Buttons for Image / Report */}
+              <div className="w-full grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
                 <button
                   type="button"
                   onClick={handleCopyImage}
                   disabled={isGenerating}
-                  className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                  className="flex items-center justify-center gap-1.5 py-2.5 px-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
                   title="Copiar imagen directamente al portapapeles"
                 >
                   {isGenerating ? (
@@ -646,18 +1021,34 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                   type="button"
                   onClick={handleShareImage}
                   disabled={isGenerating}
-                  className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                  className="flex items-center justify-center gap-1.5 py-2.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
                   title="Compartir imagen por WhatsApp u otras apps"
                 >
                   <Share2 className="w-4 h-4" />
                   <span>Compartir</span>
                 </button>
 
+                {imageScope === 'planner' && (
+                  <button
+                    type="button"
+                    onClick={handleCopyWhatsAppText}
+                    className="flex items-center justify-center gap-1.5 py-2.5 px-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95"
+                    title="Copiar texto listo para pegar en WhatsApp"
+                  >
+                    {copiedWhatsAppText ? (
+                      <Check className="w-4 h-4 text-emerald-300" />
+                    ) : (
+                      <MessageSquare className="w-4 h-4" />
+                    )}
+                    <span>{copiedWhatsAppText ? '¡Copiado!' : 'Texto WhatsApp'}</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={handleDownloadImage}
                   disabled={isGenerating}
-                  className="col-span-2 sm:col-span-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer border border-slate-200 active:scale-95 disabled:opacity-50"
+                  className={`${imageScope === 'planner' ? 'col-span-1' : 'col-span-2 sm:col-span-1'} flex items-center justify-center gap-1.5 py-2.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer border border-slate-200 active:scale-95 disabled:opacity-50`}
                   title="Descargar imagen PNG"
                 >
                   <Download className="w-4 h-4" />

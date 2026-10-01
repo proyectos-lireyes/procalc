@@ -22,6 +22,9 @@ import {
   HistoryItem,
   ComputedRow,
   ComputedSheetTotals,
+  TricountMode,
+  TricountPrepaidConfig,
+  TricountGroup,
 } from './types';
 import { DEFAULT_RATES, convertToVES, convertFromVES, formatCurrency, CURRENCY_CONFIG } from './utils/currency';
 import { evaluateExpression } from './utils/mathEvaluator';
@@ -36,6 +39,7 @@ import { QuickConverterModal } from './components/QuickConverterModal';
 import { TapeCalculatorModal } from './components/TapeCalculatorModal';
 import { ModernScientificCalculator } from './components/ModernScientificCalculator';
 import { ClosedSheetsModal } from './components/ClosedSheetsModal';
+import { TricountGroupsModal } from './components/TricountGroupsModal';
 import { checkGitHubRelease, AppReleaseInfo, DEFAULT_GITHUB_REPO } from './services/updateService';
 import { SheetSharePayload } from './utils/shareImporter';
 
@@ -43,6 +47,24 @@ const STORAGE_SHEETS_KEY = 'multicurrency_sheets_v3';
 const STORAGE_CLOSED_SHEETS_KEY = 'multicurrency_closed_sheets_v3';
 const STORAGE_SETTINGS_KEY = 'multicurrency_settings_v3';
 const STORAGE_HISTORY_KEY = 'multicurrency_history_v3';
+const STORAGE_TRICOUNT_GROUPS_KEY = 'procalc_tricount_groups_v1';
+
+const DEFAULT_TRICOUNT_GROUPS: TricountGroup[] = [
+  {
+    id: 'group_general',
+    name: 'Grupo Amigos Principal',
+    members: ['Yo', 'Carlos', 'Ana', 'María'],
+    description: 'Grupo general para salidas y gastos compartidos',
+    createdAt: Date.now(),
+  },
+  {
+    id: 'group_viaje',
+    name: 'Viaje y Vacaciones',
+    members: ['Yo', 'Amigo 1', 'Amigo 2', 'Amigo 3'],
+    description: 'Fondo para viajes y paseos',
+    createdAt: Date.now(),
+  },
+];
 
 const INITIAL_SHEET: Sheet = {
   id: 'sheet_principal',
@@ -162,6 +184,30 @@ export default function App() {
   const [isTricountOpen, setIsTricountOpen] = useState(false);
   const [isTapeCalcOpen, setIsTapeCalcOpen] = useState(false);
   const [isClosedSheetsOpen, setIsClosedSheetsOpen] = useState(false);
+  const [isTricountGroupsOpen, setIsTricountGroupsOpen] = useState(false);
+
+  // Tricount Groups (general reusable groups across accounts)
+  const [tricountGroups, setTricountGroups] = useState<TricountGroup[]>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_TRICOUNT_GROUPS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return DEFAULT_TRICOUNT_GROUPS;
+  });
+
+  // Save Tricount Groups to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_TRICOUNT_GROUPS_KEY, JSON.stringify(tricountGroups));
+    } catch (e) {
+      console.error('Error saving tricount groups', e);
+    }
+  }, [tricountGroups]);
 
   // Update check states (startup verification & notification dot)
   const [hasUpdateNotification, setHasUpdateNotification] = useState<boolean>(false);
@@ -566,6 +612,11 @@ export default function App() {
                 title: data.title || s.title,
                 members: data.members || s.members,
                 isTricountActive: data.isTricountActive ?? s.isTricountActive,
+                tricountMode: data.tricountMode ?? s.tricountMode,
+                prepaidConfig: data.prepaidConfig ?? s.prepaidConfig,
+                settledTransfers: data.settledTransfers ?? s.settledTransfers,
+                settledDebtors: data.settledDebtors ?? s.settledDebtors,
+                partialSettlements: data.partialSettlements ?? s.partialSettlements,
                 rows: rowsToSet,
                 updatedAt: Date.now(),
               }
@@ -578,6 +629,11 @@ export default function App() {
         title: data.title || `Cuenta ${sheets.length + 1}`,
         members: data.members || ['Yo'],
         isTricountActive: data.isTricountActive ?? false,
+        tricountMode: data.tricountMode,
+        prepaidConfig: data.prepaidConfig,
+        settledTransfers: data.settledTransfers,
+        settledDebtors: data.settledDebtors,
+        partialSettlements: data.partialSettlements,
         variables: [...currentSheet.variables],
         rows: rowsToSet,
         createdAt: Date.now(),
@@ -693,7 +749,25 @@ export default function App() {
 
   const handleClearRows = () => {
     setSheets((prev) =>
-      prev.map((s) => (s.id === activeSheetId ? { ...s, rows: [], updatedAt: Date.now() } : s))
+      prev.map((s) =>
+        s.id === activeSheetId
+          ? {
+              ...s,
+              rows: [],
+              settledTransfers: {},
+              settledDebtors: {},
+              partialSettlements: {},
+              prepaidConfig: s.prepaidConfig
+                ? {
+                    ...s.prepaidConfig,
+                    contributions: [],
+                    customQuotas: {},
+                  }
+                : undefined,
+              updatedAt: Date.now(),
+            }
+          : s
+      )
     );
   };
 
@@ -726,8 +800,110 @@ export default function App() {
     );
   };
 
+  const handleUpdateSheetTricountMode = (mode: TricountMode) => {
+    setSheets((prev) =>
+      prev.map((s) => (s.id === activeSheetId ? { ...s, tricountMode: mode, updatedAt: Date.now() } : s))
+    );
+  };
+
+  const handleUpdateSheetPrepaidConfig = (config: TricountPrepaidConfig) => {
+    setSheets((prev) =>
+      prev.map((s) => (s.id === activeSheetId ? { ...s, prepaidConfig: config, updatedAt: Date.now() } : s))
+    );
+  };
+
   const handleUpdateRowPayer = (rowId: string, payer: string) => {
     handleUpdateRow(rowId, { payer });
+  };
+
+  // Tricount Group Handlers (general reusable groups)
+  const handleCreateTricountGroup = (name: string, members: string[], description?: string) => {
+    const newGroup: TricountGroup = {
+      id: 'group_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      name: name.trim() || 'Nuevo Grupo',
+      members: members.filter((m) => m.trim().length > 0),
+      description: description?.trim() || undefined,
+      createdAt: Date.now(),
+    };
+    setTricountGroups((prev) => [...prev, newGroup]);
+  };
+
+  const handleUpdateTricountGroup = (
+    id: string,
+    name: string,
+    members: string[],
+    description?: string
+  ) => {
+    const filteredMembers = members.filter((m) => m.trim().length > 0);
+    setTricountGroups((prev) =>
+      prev.map((g) =>
+        g.id === id
+          ? {
+              ...g,
+              name: name.trim() || g.name,
+              members: filteredMembers,
+              description: description?.trim() || undefined,
+            }
+          : g
+      )
+    );
+    // If active sheet is linked to this group, keep its members in sync
+    setSheets((prev) =>
+      prev.map((s) => {
+        if (s.tricountGroupId === id) {
+          return {
+            ...s,
+            members: filteredMembers,
+            updatedAt: Date.now(),
+          };
+        }
+        return s;
+      })
+    );
+  };
+
+  const handleDeleteTricountGroup = (groupId: string) => {
+    setTricountGroups((prev) => prev.filter((g) => g.id !== groupId));
+    setSheets((prev) =>
+      prev.map((s) => (s.tricountGroupId === groupId ? { ...s, tricountGroupId: undefined } : s))
+    );
+  };
+
+  const handleAssociateTricountGroup = (groupId: string) => {
+    const group = tricountGroups.find((g) => g.id === groupId);
+    setSheets((prev) =>
+      prev.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        if (!groupId) {
+          return { ...s, tricountGroupId: undefined, updatedAt: Date.now() };
+        }
+        return {
+          ...s,
+          tricountGroupId: groupId,
+          isTricountActive: true,
+          members: group && group.members.length > 0 ? [...group.members] : s.members,
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  };
+
+  const handleUpdateSettledTransfers = (settledTransfers: Record<string, boolean>) => {
+    setSheets((prev) =>
+      prev.map((s) => (s.id === activeSheetId ? { ...s, settledTransfers, updatedAt: Date.now() } : s))
+    );
+  };
+
+  const handleUpdateSettledDebtors = (settledDebtors: Record<string, boolean>) => {
+    setSheets((prev) =>
+      prev.map((s) => (s.id === activeSheetId ? { ...s, settledDebtors, updatedAt: Date.now() } : s))
+    );
+  };
+
+  const handleUpdateSheetPartialSettlements = (partialSettlements: Record<string, number>) => {
+    setSheets((prev) =>
+      prev.map((s) => (s.id === activeSheetId ? { ...s, partialSettlements, updatedAt: Date.now() } : s))
+    );
   };
 
   // Insertion into active row
@@ -826,6 +1002,17 @@ export default function App() {
               onInsertExpression={handleInsertToActiveRow}
               onUpdateSheetMembers={handleUpdateSheetMembers}
               onToggleSheetTricount={handleToggleSheetTricount}
+              onUpdateSheetTricountMode={handleUpdateSheetTricountMode}
+              onUpdatePrepaidConfig={handleUpdateSheetPrepaidConfig}
+              onUpdateSettledTransfers={handleUpdateSettledTransfers}
+              onUpdateSettledDebtors={handleUpdateSettledDebtors}
+              onUpdatePartialSettlements={handleUpdateSheetPartialSettlements}
+              tricountGroups={tricountGroups}
+              onOpenTricountGroups={() => setIsTricountGroupsOpen(true)}
+              onAssociateTricountGroup={handleAssociateTricountGroup}
+              onCreateTricountGroup={(name, members, description) => handleCreateTricountGroup(name, members, description)}
+              onUpdateTricountGroup={handleUpdateTricountGroup}
+              onDeleteTricountGroup={handleDeleteTricountGroup}
               onOpenClosedSheets={() => setIsClosedSheetsOpen(true)}
               closedSheetsCount={closedSheets.length}
               onImportSheet={handleImportSheet}
@@ -884,6 +1071,8 @@ export default function App() {
         }}
         initialReleaseInfo={startupReleaseInfo}
         hasUpdateNotification={hasUpdateNotification}
+        onOpenTricountGroups={() => setIsTricountGroupsOpen(true)}
+        tricountGroupsCount={tricountGroups.length}
       />
 
       <HistoryModal
@@ -910,6 +1099,17 @@ export default function App() {
         onInsertToSheet={(expr, curr) => {
           handleAddRow({ concept: 'Conversión rápida', expression: expr, currency: curr });
         }}
+      />
+
+      <TricountGroupsModal
+        isOpen={isTricountGroupsOpen}
+        onClose={() => setIsTricountGroupsOpen(false)}
+        groups={tricountGroups}
+        currentSheet={currentSheet}
+        onCreateGroup={handleCreateTricountGroup}
+        onUpdateGroup={handleUpdateTricountGroup}
+        onDeleteGroup={handleDeleteTricountGroup}
+        onAssociateGroupToCurrentSheet={handleAssociateTricountGroup}
       />
 
       {/* 4. Slim, space-saving Bottom Navigation Bar (Docker) */}

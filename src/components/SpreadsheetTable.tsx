@@ -16,6 +16,17 @@ import {
   Eye,
   CreditCard,
   Download,
+  Plane,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
+  CheckCircle2,
+  Calendar,
+  Clock,
+  Pencil,
+  Search,
+  AlertCircle,
+  Target,
 } from 'lucide-react';
 import {
   Sheet,
@@ -25,16 +36,27 @@ import {
   Currency,
   RatesState,
   AppSettings,
+  TricountMode,
+  TricountPrepaidConfig,
+  TricountContribution,
+  TricountGroup,
 } from '../types';
 import { SheetSharePayload } from '../utils/shareImporter';
 import { ImportSharedModal } from './ImportSharedModal';
 import { FunctionInfoModal, FunctionHelpInfo } from './FunctionInfoModal';
+import { TricountModal } from './TricountModal';
 import { useLongPress } from '../utils/useLongPress';
+import {
+  calculatePrepaidTripStats,
+  createDefaultPrepaidConfig,
+  resolveMemberForContribution,
+} from '../utils/tricountPrepaid';
 import {
   ALL_CURRENCIES,
   CURRENCY_CONFIG,
   formatCurrency,
   formatNumber,
+  convertCurrency,
 } from '../utils/currency';
 import { parseVariableDeclaration } from '../utils/variableParser';
 import { useVirtualKeyboard } from '../utils/useVirtualKeyboard';
@@ -66,6 +88,17 @@ interface SpreadsheetTableProps {
   onInsertExpression?: (text: string) => void;
   onUpdateSheetMembers?: (members: string[]) => void;
   onToggleSheetTricount?: (isActive: boolean) => void;
+  onUpdateSheetTricountMode?: (mode: TricountMode) => void;
+  onUpdatePrepaidConfig?: (config: TricountPrepaidConfig) => void;
+  onUpdateSettledTransfers?: (settledTransfers: Record<string, boolean>) => void;
+  onUpdateSettledDebtors?: (settledDebtors: Record<string, boolean>) => void;
+  onUpdatePartialSettlements?: (partialSettlements: Record<string, number>) => void;
+  tricountGroups?: TricountGroup[];
+  onOpenTricountGroups?: () => void;
+  onAssociateTricountGroup?: (groupId: string) => void;
+  onCreateTricountGroup?: (name: string, members: string[], description?: string) => void;
+  onUpdateTricountGroup?: (id: string, name: string, members: string[], description?: string) => void;
+  onDeleteTricountGroup?: (id: string) => void;
   onOpenClosedSheets?: () => void;
   closedSheetsCount?: number;
   onImportSheet?: (data: SheetSharePayload, mode: 'new' | 'replace') => void;
@@ -92,6 +125,17 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   onOpenExportReport,
   onUpdateSheetMembers,
   onToggleSheetTricount,
+  onUpdateSheetTricountMode,
+  onUpdatePrepaidConfig,
+  onUpdateSettledTransfers,
+  onUpdateSettledDebtors,
+  onUpdatePartialSettlements,
+  tricountGroups,
+  onOpenTricountGroups,
+  onAssociateTricountGroup,
+  onCreateTricountGroup,
+  onUpdateTricountGroup,
+  onDeleteTricountGroup,
   onOpenClosedSheets,
   closedSheetsCount = 0,
   onImportSheet,
@@ -217,6 +261,144 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   const [quickPayerName, setQuickPayerName] = useState('');
   const [copiedTricount, setCopiedTricount] = useState(false);
 
+  // Planificador de Viaje / Prepaid Stats
+  const isPrepaidMode = sheet.tricountMode === 'prepaid';
+  const members = useMemo(
+    () => (sheet.members && sheet.members.length > 0 ? sheet.members : ['Yo', 'Amigo 1']),
+    [sheet.members]
+  );
+
+  const plannerCurrency: Currency = sheet.prepaidConfig?.targetCurrency || settings.displayCurrency;
+
+  const prepaidStats = useMemo(() => {
+    if (!sheet.prepaidConfig?.targetAmount && !isPrepaidMode && sheet.tricountMode !== 'prepaid') {
+      return null;
+    }
+    return calculatePrepaidTripStats(members, sheet.prepaidConfig, rates, plannerCurrency);
+  }, [sheet.prepaidConfig, isPrepaidMode, sheet.tricountMode, members, rates, plannerCurrency]);
+
+  // Quick Abono & Member Detail States & Target Edit States
+  const [selectedMemberDetail, setSelectedMemberDetail] = useState<string | null>(null);
+  const [isEditingTargetOutside, setIsEditingTargetOutside] = useState(false);
+  const [outsideTargetInput, setOutsideTargetInput] = useState('');
+  const [outsideTargetCurrency, setOutsideTargetCurrency] = useState<Currency>('USD');
+  const [editingContrib, setEditingContrib] = useState<TricountContribution | null>(null);
+  const [contribToDelete, setContribToDelete] = useState<TricountContribution | null>(null);
+  const [plannerSearchQuery, setPlannerSearchQuery] = useState('');
+  const [plannerFilterStatus, setPlannerFilterStatus] = useState<'all' | 'pending' | 'completed'>('all');
+  const [isQuickAbonoOpen, setIsQuickAbonoOpen] = useState(false);
+  const [quickAbonoMember, setQuickAbonoMember] = useState('');
+  const [quickAbonoAmount, setQuickAbonoAmount] = useState('');
+  const [quickAbonoCurrency, setQuickAbonoCurrency] = useState<Currency>(settings.displayCurrency);
+  const [quickAbonoNote, setQuickAbonoNote] = useState('');
+  const [quickAbonoDate, setQuickAbonoDate] = useState<string>('');
+  const [quickAbonoError, setQuickAbonoError] = useState<string | null>(null);
+
+  const formatContributionDate = (timestamp: number) => {
+    if (!timestamp) return 'Fecha no registrada';
+    const d = new Date(timestamp);
+    return d.toLocaleDateString('es-ES', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const handleOpenQuickAbono = (memberName?: string) => {
+    setQuickAbonoMember(memberName || members[0] || 'Yo');
+    setQuickAbonoAmount('');
+    setQuickAbonoCurrency(sheet.prepaidConfig?.targetCurrency || settings.displayCurrency);
+    setQuickAbonoNote('');
+    setQuickAbonoDate(new Date().toISOString().slice(0, 16));
+    setQuickAbonoError(null);
+    setIsQuickAbonoOpen(true);
+  };
+
+  const handleSaveQuickAbono = (e: React.FormEvent) => {
+    e.preventDefault();
+    setQuickAbonoError(null);
+    const num = parseFloat(quickAbonoAmount.replace(',', '.'));
+    if (isNaN(num) || num <= 0) {
+      setQuickAbonoError('Ingresa un monto válido mayor a 0.');
+      return;
+    }
+
+    const memberToUse = quickAbonoMember || members[0] || 'Yo';
+    const timestamp = quickAbonoDate ? new Date(quickAbonoDate).getTime() : Date.now();
+
+    const newContrib: TricountContribution = {
+      id: 'contrib_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      member: memberToUse,
+      amount: num,
+      currency: quickAbonoCurrency,
+      date: isNaN(timestamp) ? Date.now() : timestamp,
+      note: quickAbonoNote.trim() || undefined,
+    };
+
+    const currentConfig: TricountPrepaidConfig = sheet.prepaidConfig || {
+      targetAmount: 500,
+      targetCurrency: 'USD',
+      customQuotas: {},
+      contributions: [],
+    };
+
+    const nextConfig: TricountPrepaidConfig = {
+      ...currentConfig,
+      contributions: [...(currentConfig.contributions || []), newContrib],
+    };
+
+    if (onUpdatePrepaidConfig) {
+      onUpdatePrepaidConfig(nextConfig);
+    }
+
+    setIsQuickAbonoOpen(false);
+  };
+
+  const handleUpdateContribution = (updated: TricountContribution) => {
+    const currentConfig: TricountPrepaidConfig = sheet.prepaidConfig || {
+      targetAmount: 500,
+      targetCurrency: 'USD',
+      customQuotas: {},
+      contributions: [],
+    };
+
+    const nextContribs = (currentConfig.contributions || []).map((c) =>
+      c.id === updated.id ? updated : c
+    );
+
+    const nextConfig: TricountPrepaidConfig = {
+      ...currentConfig,
+      contributions: nextContribs,
+    };
+
+    if (onUpdatePrepaidConfig) {
+      onUpdatePrepaidConfig(nextConfig);
+    }
+    setEditingContrib(null);
+  };
+
+  const handleDeleteContribution = (id: string) => {
+    const currentConfig: TricountPrepaidConfig = sheet.prepaidConfig || {
+      targetAmount: 500,
+      targetCurrency: 'USD',
+      customQuotas: {},
+      contributions: [],
+    };
+
+    const nextContribs = (currentConfig.contributions || []).filter((c) => c.id !== id);
+    const nextConfig: TricountPrepaidConfig = {
+      ...currentConfig,
+      contributions: nextContribs,
+    };
+
+    if (onUpdatePrepaidConfig) {
+      onUpdatePrepaidConfig(nextConfig);
+    }
+    setContribToDelete(null);
+  };
+
   // Virtual keypad for amount input and device keyboard for descriptions
   const amountInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const isNativeKeyboardOpen = useVirtualKeyboard();
@@ -301,7 +483,9 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   };
 
   // Local or sheet-persisted tricount toggle state
-  const isTricountActive = sheet.isTricountActive ?? (sheet.members && sheet.members.length > 0);
+  const isTricountActive =
+    sheet.tricountMode === 'postpaid' ||
+    (sheet.isTricountActive === true && sheet.tricountMode !== 'prepaid');
 
   React.useEffect(() => {
     setTempTitle(sheet.title);
@@ -321,7 +505,6 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
 
   const displayConfig = CURRENCY_CONFIG[settings.displayCurrency];
   const paymentConfig = CURRENCY_CONFIG[settings.paymentCurrency];
-  const members = sheet.members || [];
 
   // Handle adding member to active sheet
   const handleAddMember = (e: React.FormEvent) => {
@@ -355,7 +538,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
     }
   };
 
-  // Compute Active Sheet Tricount Settlement
+  // Compute Active Sheet Tricount Settlement (Postpaid)
   const settleCurrency = settings.displayCurrency;
   const tricountStats = useMemo(() => {
     if (members.length === 0) {
@@ -623,8 +806,247 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
         )}
       </div>
 
-      {/* 4. EXCEL-STYLE 1-ROW SPREADSHEET TABLE */}
-      <div className="w-full flex-1 min-h-0 overflow-y-auto">
+      {/* CUERPO PRINCIPAL: O PLANNER DEDICADO (FONDO AZUL) O TABLA EXCEL DE CÁLCULO */}
+      {isPrepaidMode && prepaidStats ? (
+        <div className="w-full flex-1 min-h-0 overflow-y-auto bg-slate-100/90 p-2 sm:p-2.5 space-y-2">
+          {/* 1. TARJETA DE LA META (ULTRA COMPACTA Y ELEGANTE) */}
+          <div className="bg-gradient-to-r from-blue-950 via-blue-900 to-indigo-950 text-white rounded-lg p-2 sm:p-2.5 shadow-xs border border-blue-700/60 space-y-1.5 shrink-0">
+            {/* Métricas en 1 fila ultra compacta con Cuota p/p */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-center sm:text-left">
+              <div
+                onClick={() => {
+                  setOutsideTargetInput(String(sheet.prepaidConfig?.targetAmount || 500));
+                  setOutsideTargetCurrency(plannerCurrency);
+                  setIsEditingTargetOutside(true);
+                }}
+                className="bg-white/10 hover:bg-white/20 rounded-md p-1.5 border border-white/10 cursor-pointer transition-colors group"
+                title="Toca para ajustar el monto meta y la moneda"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] font-bold text-blue-200 uppercase tracking-wider block truncate">
+                    Meta Total
+                  </span>
+                  <Pencil className="w-2.5 h-2.5 text-blue-300 opacity-60 group-hover:opacity-100" />
+                </div>
+                <span className="font-mono font-black text-xs sm:text-sm text-white block truncate">
+                  {formatCurrency(prepaidStats.totalTargetInBase, plannerCurrency, settings.decimals)}
+                </span>
+              </div>
+
+              <div className="bg-white/10 rounded-md p-1.5 border border-white/10">
+                <span className="text-[9px] font-bold text-blue-200 uppercase tracking-wider block truncate">
+                  Cuota p/p
+                </span>
+                <span className="font-mono font-black text-xs sm:text-sm text-blue-100 block truncate">
+                  {formatCurrency(
+                    prepaidStats.totalTargetInBase / (members.length || 1),
+                    plannerCurrency,
+                    settings.decimals
+                  )}
+                </span>
+              </div>
+
+              <div className="bg-emerald-500/20 rounded-md p-1.5 border border-emerald-400/30">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[9px] font-bold text-emerald-300 uppercase tracking-wider block truncate">
+                    Abonado
+                  </span>
+                  <span className="text-[8.5px] font-extrabold px-1 py-0.2 rounded bg-emerald-400 text-slate-950 shrink-0">
+                    {prepaidStats.progressPercent.toFixed(1)}%
+                  </span>
+                </div>
+                <span className="font-mono font-black text-xs sm:text-sm text-emerald-300 block truncate">
+                  {formatCurrency(prepaidStats.totalCollectedInBase, plannerCurrency, settings.decimals)}
+                </span>
+              </div>
+
+              <div className="bg-white/10 rounded-md p-1.5 border border-white/10">
+                <span className="text-[9px] font-bold text-amber-200 uppercase tracking-wider block truncate">
+                  Falta
+                </span>
+                <span className="font-mono font-black text-xs sm:text-sm text-amber-300 block truncate">
+                  {formatCurrency(prepaidStats.totalRemainingInBase, plannerCurrency, settings.decimals)}
+                </span>
+              </div>
+            </div>
+
+            {/* Barra de Progreso Ultra Delgada */}
+            <div className="w-full bg-blue-950/80 rounded-full h-1.5 overflow-hidden border border-blue-400/20">
+              <div
+                className="bg-gradient-to-r from-blue-400 via-teal-300 to-emerald-400 h-full rounded-full transition-all duration-500"
+                style={{ width: `${Math.min(100, Math.max(0, prepaidStats.progressPercent))}%` }}
+              />
+            </div>
+          </div>
+
+          {/* 2. BARRA DE BÚSQUEDA Y FILTROS POR PARTICIPANTE */}
+          {(() => {
+            const allMembers = prepaidStats.membersStats;
+            const completedCount = allMembers.filter((m) => m.isCompleted).length;
+            const pendingCount = allMembers.length - completedCount;
+
+            const filteredList = allMembers.filter((ms) => {
+              const queryMatch = ms.name.toLowerCase().includes(plannerSearchQuery.toLowerCase().trim());
+              if (!queryMatch) return false;
+              if (plannerFilterStatus === 'completed') return ms.isCompleted;
+              if (plannerFilterStatus === 'pending') return !ms.isCompleted;
+              return true;
+            });
+
+            return (
+              <div className="space-y-2">
+                {/* Search Input & Status Filter Chips */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5">
+                  {/* Search Input */}
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={plannerSearchQuery}
+                      onChange={(e) => setPlannerSearchQuery(e.target.value)}
+                      placeholder="Buscar participante..."
+                      className="w-full bg-white border border-slate-300 rounded-lg pl-8 pr-7 py-1 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-2xs"
+                    />
+                    {plannerSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setPlannerSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-700 cursor-pointer"
+                        title="Limpiar búsqueda"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Filter Status Chips */}
+                  <div className="flex items-center gap-1 shrink-0 overflow-x-auto scrollbar-none py-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setPlannerFilterStatus('all')}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer shrink-0 border ${
+                        plannerFilterStatus === 'all'
+                          ? 'bg-blue-600 text-white border-blue-700 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      Todos ({allMembers.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPlannerFilterStatus('pending')}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer shrink-0 border ${
+                        plannerFilterStatus === 'pending'
+                          ? 'bg-amber-600 text-white border-amber-700 shadow-2xs'
+                          : 'bg-white text-amber-700 border-amber-200 hover:bg-amber-50'
+                      }`}
+                    >
+                      Pendientes ({pendingCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPlannerFilterStatus('completed')}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer shrink-0 border ${
+                        plannerFilterStatus === 'completed'
+                          ? 'bg-emerald-600 text-white border-emerald-700 shadow-2xs'
+                          : 'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'
+                      }`}
+                    >
+                      Listos ({completedCount})
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3. LISTA DE TARJETAS ULTRA COMPACTAS */}
+                {filteredList.length === 0 ? (
+                  <div className="p-4 text-center bg-white border border-slate-200 rounded-lg text-slate-400 text-xs">
+                    No se encontraron participantes que coincidan con la búsqueda.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                    {filteredList.map((ms) => (
+                      <div
+                        key={ms.name}
+                        onClick={() => setSelectedMemberDetail(ms.name)}
+                        className={`bg-white rounded-lg p-2 border transition-all shadow-2xs hover:shadow-xs cursor-pointer flex flex-col justify-between gap-1 active:scale-[0.99] select-none ${
+                          ms.isCompleted
+                            ? 'border-emerald-300 hover:border-emerald-500 bg-emerald-50/20'
+                            : 'border-slate-200 hover:border-blue-400 hover:bg-blue-50/10'
+                        }`}
+                        title={`Toca para ver historial de abonos y fechas de ${ms.name}`}
+                      >
+                        {/* Fila 1: Avatar, Nombre, Contador y Estado */}
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <div
+                              className={`w-6 h-6 rounded-full flex items-center justify-center font-black text-[10px] shrink-0 ${
+                                ms.isCompleted
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-blue-100 text-blue-800'
+                              }`}
+                            >
+                              {ms.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <span className="font-extrabold text-xs text-slate-900 block truncate leading-tight">
+                                {ms.name}
+                              </span>
+                              <span className="text-[9px] text-slate-400 font-mono block truncate leading-none">
+                                {ms.contributionsCount} {ms.contributionsCount === 1 ? 'abono' : 'abonos'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {ms.isCompleted ? (
+                            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-0.5 shrink-0">
+                              <Check className="w-2.5 h-2.5 stroke-[3]" /> Listo
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-bold font-mono px-1.5 py-0.2 rounded bg-blue-50 text-blue-800 border border-blue-200 shrink-0">
+                              {ms.percent}%
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Fila 2: Barra de Progreso Ultra Delgada */}
+                        <div className="w-full bg-slate-200/80 rounded-full h-1 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-300 ${
+                              ms.isCompleted ? 'bg-emerald-500' : 'bg-blue-600'
+                            }`}
+                            style={{ width: `${Math.min(100, Math.max(0, ms.percent))}%` }}
+                          />
+                        </div>
+
+                        {/* Fila 3: Montos Abonado y Restante en 1 línea */}
+                        <div className="flex items-center justify-between text-[10px] font-mono leading-tight pt-0.5">
+                          <div className="truncate">
+                            <span className="text-[9px] font-sans text-slate-400 mr-1">Abonó:</span>
+                            <span className="font-bold text-emerald-700">
+                              {formatCurrency(ms.collectedInBase, plannerCurrency, 2)}
+                            </span>
+                          </div>
+                          <div className="text-right shrink-0">
+                            {ms.isCompleted ? (
+                              <span className="text-[9px] font-sans font-bold text-emerald-700">100%</span>
+                            ) : (
+                              <span className="text-[9px] font-sans font-medium text-amber-700">
+                                Falta: <span className="font-mono font-bold">{formatCurrency(ms.remainingInBase, plannerCurrency, 2)}</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      ) : (
+        /* 4. EXCEL-STYLE 1-ROW SPREADSHEET TABLE */
+        <div className="w-full flex-1 min-h-0 overflow-y-auto">
         {computedRows.length === 0 ? (
           <div className="p-8 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2 border-b border-slate-200">
             <span>No hay operaciones en esta cuenta.</span>
@@ -869,6 +1291,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
           </table>
         )}
       </div>
+      )}
 
       {/* 5. Spreadsheet Footer Toolbar: Importar, Exportar, Vaciar, Mostrar, Tricount distribuidos al 100% */}
       <div className="px-1.5 sm:px-3 py-1.5 bg-slate-50 border-t border-slate-200 shrink-0 select-none">
@@ -905,121 +1328,124 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
 
           {/* 3. VACIAR */}
           <div className="w-full min-w-0">
-            {confirmClearRows ? (
-              <div className="w-full flex items-center justify-center gap-0.5 bg-rose-50 border border-rose-200 rounded py-0.5 px-0.5 text-[10px] sm:text-xs">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onClearRows();
-                    setConfirmClearRows(false);
-                  }}
-                  className="px-1 sm:px-1.5 py-0.5 bg-rose-600 text-white font-bold rounded hover:bg-rose-700 cursor-pointer"
-                  title="Confirmar vaciar filas"
-                >
-                  Sí
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmClearRows(false)}
-                  className="px-0.5 sm:px-1 py-0.5 text-slate-600 hover:text-slate-900 cursor-pointer text-[10px]"
-                  title="Cancelar"
-                >
-                  No
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                {...vaciarLongPress.handlers}
-                className="w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-700 rounded border border-slate-300 hover:border-rose-300 text-[11px] sm:text-xs font-bold transition-colors cursor-pointer shadow-2xs active:scale-95 min-w-0"
-                title="Vaciar todas las filas (Mantén presionado para ver qué hace)"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                <span className="truncate">Vaciar</span>
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setConfirmClearRows(true)}
+              {...vaciarLongPress.handlers}
+              className="w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-700 rounded border border-slate-300 hover:border-rose-300 text-[11px] sm:text-xs font-bold transition-colors cursor-pointer shadow-2xs active:scale-95 min-w-0"
+              title="Vaciar todas las filas (Mantén presionado para ver qué hace)"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+              <span className="truncate">Vaciar</span>
+            </button>
           </div>
 
-          {/* 4. MOSTRAR (Muestra / oculta la columna de pagar) */}
-          <button
-            type="button"
-            {...mostrarLongPress.handlers}
-            className={`w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 rounded text-[11px] sm:text-xs font-bold transition-colors cursor-pointer shadow-2xs active:scale-95 min-w-0 border ${
-              showPaymentColumn
-                ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
-                : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50'
-            }`}
-            title={`Mostrar u ocultar columna de pago (${settings.paymentCurrency}) (Mantén presionado para ver qué hace)`}
-          >
-            <Eye className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">Mostrar</span>
-          </button>
+          {/* 4. EN PLANNER: + ABONO / EN MODO NORMAL: MOSTRAR COLUMNA */}
+          {isPrepaidMode ? (
+            <button
+              type="button"
+              onClick={() => handleOpenQuickAbono()}
+              className="w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded border border-emerald-700 text-[11px] sm:text-xs font-bold transition-all cursor-pointer shadow-2xs active:scale-95 min-w-0"
+              title="Registrar nuevo abono a la colecta"
+            >
+              <Plus className="w-3.5 h-3.5 shrink-0 stroke-[3]" />
+              <span className="truncate">+ Abono</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              {...mostrarLongPress.handlers}
+              className={`w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 rounded text-[11px] sm:text-xs font-bold transition-colors cursor-pointer shadow-2xs active:scale-95 min-w-0 border ${
+                showPaymentColumn
+                  ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
+                  : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50'
+              }`}
+              title={`Mostrar u ocultar columna de pago (${settings.paymentCurrency}) (Mantén presionado para ver qué hace)`}
+            >
+              <Eye className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Mostrar</span>
+            </button>
+          )}
 
-          {/* 5. TRICOUNT */}
+          {/* 5. TRIPCOUNT / PLANIFICACIÓN VIAJE (AZUL PARA PLANNER, VERDE PARA TRIPCOUNT) */}
           <button
             id="tricount-account-btn"
             type="button"
             {...tricountLongPress.handlers}
             className={`w-full flex items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 rounded text-[11px] sm:text-xs font-bold transition-all cursor-pointer shadow-2xs active:scale-95 min-w-0 border ${
-              isTricountActive
+              sheet.tricountMode === 'prepaid'
+                ? 'bg-blue-600 text-white border-blue-700 hover:bg-blue-500'
+                : isTricountActive
                 ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-500'
-                : 'bg-white text-emerald-800 border-emerald-300 hover:bg-emerald-50'
+                : 'bg-white text-slate-800 border-slate-300 hover:bg-slate-50'
             }`}
-            title="Opciones de Tricount (Mantén presionado para ver qué hace)"
+            title="Opciones de Tripcount y Planificación de Viaje (Mantén presionado para ver qué hace)"
           >
-            <Users className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">{isTricountActive ? `Tric. (${members.length})` : 'Tricount'}</span>
+            {sheet.tricountMode === 'prepaid' ? (
+              <Plane className="w-3.5 h-3.5 shrink-0" />
+            ) : (
+              <Users className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span className="truncate">
+              {sheet.tricountMode === 'prepaid'
+                ? `Fondo (${members.length})`
+                : isTricountActive
+                ? `Trip. (${members.length})`
+                : 'Tripcount'}
+            </span>
           </button>
         </div>
       </div>
 
-      {/* 6. Grand Totals Summary Strip (Compacto y elegante encima del teclado) */}
-      <div className="bg-slate-50/95 backdrop-blur-xs text-slate-800 px-2 py-1 sm:px-3 sm:py-1 border-t border-slate-200 shrink-0">
-        <div className="grid grid-cols-4 gap-1 sm:gap-1.5 max-w-2xl mx-auto">
-          {/* Total Bs */}
-          <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-emerald-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
-            <span className="text-[9px] uppercase tracking-wide text-emerald-700 font-bold truncate">
-              Total Bs
-            </span>
-            <span className="text-[11px] sm:text-xs font-mono font-bold text-emerald-800 truncate">
-              {formatNumber(totals.netByCurrency.VES, settings.decimals)} <span className="text-[9px]">Bs</span>
-            </span>
-          </div>
+      {/* 6. Grand Totals Summary Strip (Solo en modo normal de tabla) */}
+      {!isPrepaidMode && (
+        <div className="bg-slate-50/95 backdrop-blur-xs text-slate-800 px-2 py-1 sm:px-3 sm:py-1 border-t border-slate-200 shrink-0">
+          <div className="grid grid-cols-4 gap-1 sm:gap-1.5 max-w-2xl mx-auto">
+            {/* Total Bs */}
+            <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-emerald-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
+              <span className="text-[9px] uppercase tracking-wide text-emerald-700 font-bold truncate">
+                Total Bs
+              </span>
+              <span className="text-[11px] sm:text-xs font-mono font-bold text-emerald-800 truncate">
+                {formatNumber(totals.netByCurrency.VES, settings.decimals)} <span className="text-[9px]">Bs</span>
+              </span>
+            </div>
 
-          {/* Total $ */}
-          <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-blue-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
-            <span className="text-[9px] uppercase tracking-wide text-blue-700 font-bold truncate">
-              Total $
-            </span>
-            <span className="text-[11px] sm:text-xs font-mono font-bold text-blue-800 truncate">
-              $ {formatNumber(totals.netByCurrency.USD, settings.decimals)}
-            </span>
-          </div>
+            {/* Total $ */}
+            <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-blue-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
+              <span className="text-[9px] uppercase tracking-wide text-blue-700 font-bold truncate">
+                Total $
+              </span>
+              <span className="text-[11px] sm:text-xs font-mono font-bold text-blue-800 truncate">
+                $ {formatNumber(totals.netByCurrency.USD, settings.decimals)}
+              </span>
+            </div>
 
-          {/* Total USDT */}
-          <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-amber-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
-            <span className="text-[9px] uppercase tracking-wide text-amber-700 font-bold truncate">
-              Total USDT
-            </span>
-            <span className="text-[11px] sm:text-xs font-mono font-bold text-amber-800 truncate">
-              {formatNumber(totals.netByCurrency.USDT, settings.decimals)} <span className="text-[9px]">USDT</span>
-            </span>
-          </div>
+            {/* Total USDT */}
+            <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-amber-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
+              <span className="text-[9px] uppercase tracking-wide text-amber-700 font-bold truncate">
+                Total USDT
+              </span>
+              <span className="text-[11px] sm:text-xs font-mono font-bold text-amber-800 truncate">
+                {formatNumber(totals.netByCurrency.USDT, settings.decimals)} <span className="text-[9px]">USDT</span>
+              </span>
+            </div>
 
-          {/* Total EUR */}
-          <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-teal-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
-            <span className="text-[9px] uppercase tracking-wide text-teal-700 font-bold truncate">
-              Total EUR
-            </span>
-            <span className="text-[11px] sm:text-xs font-mono font-bold text-teal-800 truncate">
-              {formatNumber(totals.netByCurrency.EUR, settings.decimals)} <span className="text-[9px]">EUR</span>
-            </span>
+            {/* Total EUR */}
+            <div className="bg-white px-1.5 py-0.5 sm:px-2 sm:py-1 rounded border border-teal-200/80 shadow-2xs flex flex-col min-w-0 text-center sm:text-left">
+              <span className="text-[9px] uppercase tracking-wide text-teal-700 font-bold truncate">
+                Total EUR
+              </span>
+              <span className="text-[11px] sm:text-xs font-mono font-bold text-teal-800 truncate">
+                {formatNumber(totals.netByCurrency.EUR, settings.decimals)} <span className="text-[9px]">EUR</span>
+              </span>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* 7. Teclado Numérico Fijo en la parte baja (Se desactiva automáticamente al activarse el teclado del celular) */}
-      {!isNativeKeyboardOpen && (
+      {/* 7. Teclado Numérico Fijo (Solo en modo normal de tabla) */}
+      {!isPrepaidMode && !isNativeKeyboardOpen && (
         <div className="p-1.5 sm:p-2 bg-slate-100 border-t border-slate-200 shrink-0 shadow-inner">
           <div className="grid grid-cols-5 gap-1 sm:gap-1.5 max-w-2xl mx-auto">
             {/* Row 1: (, ), %, AC, DEL */}
@@ -1173,192 +1599,30 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
         </div>
       )}
 
-      {/* 7. MODAL DE OPCIONES Y LIQUIDACIÓN TRICOUNT (No ocupa espacio permanente en la pantalla) */}
-      {isTricountModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white border border-slate-200 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col text-slate-800 overflow-hidden my-auto animate-fade-in">
-            {/* Header Modal */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-emerald-50/70 shrink-0">
-              <div className="flex items-center gap-2">
-                <span className="p-1.5 rounded-lg bg-emerald-600 text-white shadow-2xs">
-                  <Users className="w-4 h-4" />
-                </span>
-                <div>
-                  <h3 className="font-bold text-sm text-emerald-950">Tricount & Gastos Compartidos</h3>
-                  <p className="text-[11px] text-emerald-800 font-medium">Cuenta: {sheet.title}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setIsTricountModalOpen(false)}
-                className="p-1.5 rounded-md text-slate-400 hover:text-slate-700 hover:bg-white transition-colors cursor-pointer"
-                title="Cerrar ventana"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-4 overflow-y-auto space-y-4 flex-1">
-              {/* Toggle Tricount Active */}
-              <div className="flex items-center justify-between p-3 rounded-lg border border-slate-200 bg-slate-50">
-                <div>
-                  <span className="text-xs font-bold text-slate-900 block">Modo Gastos Compartidos</span>
-                  <span className="text-[11px] text-slate-500">Activa participantes y división de pagos</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleToggleTricount}
-                  className={`px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer ${
-                    isTricountActive
-                      ? 'bg-emerald-600 text-white shadow-2xs'
-                      : 'bg-slate-200 text-slate-700'
-                  }`}
-                >
-                  {isTricountActive ? 'Activo' : 'Desactivado'}
-                </button>
-              </div>
-
-              {/* Participants Section */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800">Participantes del Grupo:</span>
-                  <span className="text-[11px] text-slate-500">{members.length} personas</span>
-                </div>
-
-                {/* Member Pills */}
-                <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 bg-slate-50 rounded-lg border border-slate-200">
-                  {members.length === 0 ? (
-                    <span className="text-xs text-slate-400 italic">No hay participantes añadidos aún.</span>
-                  ) : (
-                    members.map((m) => (
-                      <span
-                        key={m}
-                        className="inline-flex items-center gap-1.5 bg-white border border-emerald-300 text-emerald-900 px-2.5 py-1 rounded-full text-xs font-semibold shadow-2xs"
-                      >
-                        <span>{m}</span>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveMember(m)}
-                          className="text-slate-400 hover:text-rose-600 p-0.5 rounded cursor-pointer"
-                          title="Eliminar participante"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    ))
-                  )}
-                </div>
-
-                {/* Add Member Form */}
-                <form onSubmit={handleAddMember} className="flex gap-2 pt-1">
-                  <input
-                    type="text"
-                    value={newMemberName}
-                    onChange={(e) => setNewMemberName(e.target.value)}
-                    placeholder="Nombre de la persona (ej: Carlos, María)"
-                    className="flex-1 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                  <button
-                    type="submit"
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Agregar</span>
-                  </button>
-                </form>
-              </div>
-
-              {/* Settlement / Balances Section */}
-              {isTricountActive && members.length >= 2 && (
-                <div className="space-y-3 pt-2 border-t border-slate-200">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800">Liquidación y Balances:</span>
-                    <button
-                      type="button"
-                      onClick={handleCopyTricountReport}
-                      className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-md text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
-                    >
-                      <Share2 className="w-3 h-3" />
-                      <span>{copiedTricount ? '¡Copiado!' : 'Copiar para WhatsApp'}</span>
-                    </button>
-                  </div>
-
-                  {/* Metrics Summary */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase block">Gasto Total</span>
-                      <span className="text-sm font-mono font-bold text-slate-900">
-                        {formatCurrency(tricountStats.totalSharedExpense, settleCurrency, 2)}
-                      </span>
-                    </div>
-                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5">
-                      <span className="text-[10px] font-bold text-emerald-800 uppercase block">Cuota por Persona</span>
-                      <span className="text-sm font-mono font-bold text-emerald-900">
-                        {formatCurrency(tricountStats.fairShare, settleCurrency, 2)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Debts Transfers list */}
-                  <div className="space-y-1.5">
-                    <span className="text-[11px] font-bold text-slate-600">¿Quién le paga a quién?</span>
-                    {tricountStats.transfers.length === 0 ? (
-                      <div className="bg-emerald-50 text-emerald-800 text-xs p-2.5 rounded-lg flex items-center gap-2">
-                        <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <span>¡Todos están al día! No hay pagos pendientes.</span>
-                      </div>
-                    ) : (
-                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                        {tricountStats.transfers.map((t, idx) => (
-                          <div
-                            key={idx}
-                            className="p-2 rounded-lg border border-slate-200 bg-slate-50 flex flex-col gap-1 text-xs"
-                          >
-                            <div className="flex items-center justify-between font-bold">
-                              <span className="text-rose-700">{t.from}</span>
-                              <div className="flex items-center gap-1 text-slate-400 text-[10px]">
-                                <span>le paga a</span>
-                                <ArrowRight className="w-3 h-3 text-slate-600" />
-                              </div>
-                              <span className="text-emerald-700">{t.to}</span>
-                            </div>
-
-                            <div className="grid grid-cols-4 gap-1 text-[10px] font-mono text-center font-bold">
-                              <div className="bg-white p-1 rounded border border-blue-200 text-blue-800">
-                                $ {formatNumber(t.amountsInAllCurrencies.USD, 2)}
-                              </div>
-                              <div className="bg-white p-1 rounded border border-emerald-200 text-emerald-800">
-                                Bs {formatNumber(t.amountsInAllCurrencies.VES, 2)}
-                              </div>
-                              <div className="bg-white p-1 rounded border border-amber-200 text-amber-800">
-                                {formatNumber(t.amountsInAllCurrencies.USDT, 2)}
-                              </div>
-                              <div className="bg-white p-1 rounded border border-teal-200 text-teal-800">
-                                € {formatNumber(t.amountsInAllCurrencies.EUR, 2)}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
-              <button
-                type="button"
-                onClick={() => setIsTricountModalOpen(false)}
-                className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-              >
-                Listo
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 7. MODAL COMPLETO DE TRICOUNT & PLANIFICACIÓN DE VIAJE (PREPAGO Y POSTPAGO) */}
+      <TricountModal
+        isOpen={isTricountModalOpen}
+        onClose={() => setIsTricountModalOpen(false)}
+        sheet={sheet}
+        sheets={sheets}
+        onSelectSheet={onSelectSheet}
+        computedRows={computedRows}
+        rates={rates}
+        settings={settings}
+        onUpdateSheetMembers={onUpdateSheetMembers}
+        onUpdateRowPayer={(rowId, payer) => onUpdateRow(rowId, { payer })}
+        onUpdateSheetTricountMode={onUpdateSheetTricountMode}
+        onUpdatePrepaidConfig={onUpdatePrepaidConfig}
+        onUpdateSettledTransfers={onUpdateSettledTransfers}
+        onUpdateSettledDebtors={onUpdateSettledDebtors}
+        onUpdatePartialSettlements={onUpdatePartialSettlements}
+        tricountGroups={tricountGroups}
+        onOpenTricountGroups={onOpenTricountGroups}
+        onAssociateTricountGroup={onAssociateTricountGroup}
+        onCreateTricountGroup={onCreateTricountGroup}
+        onUpdateTricountGroup={onUpdateTricountGroup}
+        onDeleteTricountGroup={onDeleteTricountGroup}
+      />
 
       {/* 7. MODAL RÁPIDO PARA SELECCIONAR PARTICIPANTE QUE PAGÓ */}
       {selectingPayerRowId && (
@@ -1617,6 +1881,690 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
           context="sheets"
           onImportSheet={onImportSheet}
         />
+      )}
+
+      {/* MODAL: HISTORIAL DE APORTES Y FECHAS DE UN PARTICIPANTE */}
+      {selectedMemberDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 select-none">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden flex flex-col max-h-[88vh]">
+            {/* Header Modal */}
+            <div className="flex items-center justify-between px-4 py-3.5 bg-blue-900 text-white shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center font-bold text-sm shrink-0">
+                  {selectedMemberDetail.charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <h4 className="font-extrabold text-sm sm:text-base leading-tight truncate">
+                    Aportes de {selectedMemberDetail}
+                  </h4>
+                  <p className="text-[11px] text-blue-200">
+                    Historial de abonos, fechas y comprobantes
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedMemberDetail(null)}
+                className="p-1.5 rounded-lg hover:bg-white/20 text-white/80 hover:text-white cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Contenido / Lista de Aportes */}
+            <div className="p-4 overflow-y-auto flex-1 space-y-3">
+              {(() => {
+                const memberStat = prepaidStats?.membersStats.find(
+                  (m) => m.name.trim().toLowerCase() === (selectedMemberDetail || '').trim().toLowerCase()
+                );
+                const memberContribs = (sheet.prepaidConfig?.contributions || [])
+                  .filter((c) => resolveMemberForContribution(c.member, members) === selectedMemberDetail)
+                  .sort((a, b) => (b.date || 0) - (a.date || 0));
+
+                return (
+                  <>
+                    {/* Tarjeta Resumen y Estado (Combinación de Imagen 1 e Imagen 2) */}
+                    <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-3.5 space-y-3 shadow-2xs">
+                      {/* Fila superior: Avatar + Nombre + Contador + Badge Estado */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs shrink-0 ${memberStat?.isCompleted ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}`}>
+                            {selectedMemberDetail.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <span className="font-extrabold text-sm text-slate-900 block truncate leading-tight">{selectedMemberDetail}</span>
+                            <span className="text-[11px] text-slate-400 font-mono block">
+                              {memberContribs.length} {memberContribs.length === 1 ? 'abono realizado' : 'abonos realizados'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold border shrink-0 ${memberStat?.isCompleted ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-amber-100 text-amber-900 border-amber-300'}`}>
+                          {memberStat?.isCompleted ? '✓ Cuota Completa' : `Falta ${100 - (memberStat?.percent || 0)}%`}
+                        </span>
+                      </div>
+
+                      {/* Fila de montos: Abonado vs Cuota */}
+                      <div className="flex items-center justify-between text-xs font-mono pt-1.5 border-t border-slate-200">
+                        <div>
+                          <span className="text-slate-500 font-sans mr-1">Abonado:</span>
+                          <strong className="text-slate-900 font-black">{formatCurrency(memberStat?.collectedInBase || 0, plannerCurrency, 2)}</strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 font-sans mr-1">Cuota:</span>
+                          <strong className="text-slate-900 font-black">{formatCurrency(memberStat?.quotaInBase || 0, plannerCurrency, 2)}</strong>
+                        </div>
+                      </div>
+
+                      {/* Barra de progreso */}
+                      <div className="w-full bg-slate-200/80 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${memberStat?.isCompleted ? 'bg-emerald-500' : 'bg-blue-600'}`}
+                          style={{ width: `${Math.min(100, Math.max(0, memberStat?.percent || 0))}%` }}
+                        />
+                      </div>
+
+                      {/* Caja de FALTA POR ABONAR en 4 Monedas (Imagen 1) */}
+                      {!memberStat?.isCompleted && (memberStat?.remainingInBase || 0) > 0.001 && (
+                        <div className="bg-rose-50/70 border border-rose-200/90 rounded-xl p-2.5 space-y-2">
+                          <div className="flex items-center justify-between text-xs font-extrabold text-rose-800">
+                            <div className="flex items-center gap-1">
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                              <span>FALTA POR ABONAR:</span>
+                            </div>
+                            <span className="font-mono font-black text-rose-900">{formatCurrency(memberStat?.remainingInBase || 0, plannerCurrency, 2)}</span>
+                          </div>
+
+                          {/* Grid de las 4 Monedas */}
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-center font-mono text-[11px]">
+                            <div className="bg-white border border-blue-200 rounded-lg p-1.5 shadow-2xs">
+                              <span className="text-[9px] text-blue-500 font-bold uppercase block">USD</span>
+                              <span className="font-bold text-slate-900">${formatNumber(memberStat?.remainingInAllCurrencies.USD || 0, 2)}</span>
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-lg p-1.5 shadow-2xs">
+                              <span className="text-[9px] text-slate-500 font-bold uppercase block">VES</span>
+                              <span className="font-bold text-slate-900">Bs {formatNumber(memberStat?.remainingInAllCurrencies.VES || 0, 2)}</span>
+                            </div>
+                            <div className="bg-white border border-amber-200 rounded-lg p-1.5 shadow-2xs">
+                              <span className="text-[9px] text-amber-600 font-bold uppercase block">USDT</span>
+                              <span className="font-bold text-amber-900">{formatNumber(memberStat?.remainingInAllCurrencies.USDT || 0, 2)}</span>
+                            </div>
+                            <div className="bg-white border border-emerald-200 rounded-lg p-1.5 shadow-2xs">
+                              <span className="text-[9px] text-emerald-600 font-bold uppercase block">EUR</span>
+                              <span className="font-bold text-emerald-900">€ {formatNumber(memberStat?.remainingInAllCurrencies.EUR || 0, 2)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Botón Prominente para Registrar Abono */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleOpenQuickAbono(selectedMemberDetail);
+                      }}
+                      className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all active:scale-[0.98]"
+                    >
+                      <Plus className="w-4 h-4 stroke-[3]" />
+                      <span>+ Registrar Nuevo Abono para {selectedMemberDetail}</span>
+                    </button>
+
+                    {/* Lista de Abonos */}
+                    <div className="space-y-2 pt-1">
+                      <span className="text-xs font-bold text-slate-700 block">
+                        Historial de Abonos ({memberContribs.length})
+                      </span>
+
+                      {memberContribs.length === 0 ? (
+                        <div className="p-6 text-center bg-slate-50 border border-slate-200 rounded-xl text-slate-400 text-xs space-y-2">
+                          <Clock className="w-6 h-6 mx-auto text-slate-300" />
+                          <p>Aún no hay abonos registrados para {selectedMemberDetail}.</p>
+                        </div>
+                      ) : (
+                        memberContribs.map((c) => (
+                          <div
+                            key={c.id}
+                            className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs hover:border-blue-300 transition-all flex items-center justify-between gap-2"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-mono font-extrabold text-slate-900 text-sm">
+                                  {formatCurrency(c.amount, c.currency, 2)}
+                                </span>
+                                {c.currency !== settings.displayCurrency && (
+                                  <span className="text-[11px] font-mono text-slate-500">
+                                    (~{formatCurrency(convertCurrency(c.amount, c.currency, settings.displayCurrency, rates), settings.displayCurrency, 2)})
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* FECHA Y HORA (Importante) */}
+                              <div className="flex items-center gap-1 text-[11px] text-blue-700 font-medium mt-0.5">
+                                <Calendar className="w-3 h-3 text-blue-600 shrink-0" />
+                                <span>{formatContributionDate(c.date)}</span>
+                              </div>
+
+                              {/* NOTA O CONCEPTO */}
+                              {c.note && (
+                                <p className="text-xs text-slate-600 italic mt-0.5 truncate">
+                                  "{c.note}"
+                                </p>
+                              )}
+                            </div>
+
+                            {/* Botones de Editar y Eliminar */}
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setEditingContrib(c)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-blue-700 hover:bg-blue-50 cursor-pointer transition-colors"
+                                title="Editar este abono"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setContribToDelete(c)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer transition-colors"
+                                title="Eliminar este abono"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className="p-3 bg-slate-50 border-t border-slate-100 flex justify-end shrink-0">
+              <button
+                type="button"
+                onClick={() => setSelectedMemberDetail(null)}
+                className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs cursor-pointer transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EDITAR ABONO */}
+      {editingContrib && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 select-none">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-sm w-full overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 bg-blue-900 text-white">
+              <div className="flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-blue-300" />
+                <h4 className="font-extrabold text-sm">Editar Abono</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingContrib(null)}
+                className="p-1 rounded-lg hover:bg-white/20 text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const form = e.currentTarget;
+                const amt = parseFloat((form.elements.namedItem('editAmount') as HTMLInputElement).value.replace(',', '.'));
+                if (isNaN(amt) || amt <= 0) return;
+                const curr = (form.elements.namedItem('editCurrency') as HTMLSelectElement).value as Currency;
+                const note = (form.elements.namedItem('editNote') as HTMLInputElement).value;
+                const dateStr = (form.elements.namedItem('editDate') as HTMLInputElement).value;
+                const date = dateStr ? new Date(dateStr).getTime() : editingContrib.date;
+
+                handleUpdateContribution({
+                  ...editingContrib,
+                  amount: amt,
+                  currency: curr,
+                  note: note.trim() || undefined,
+                  date: date || Date.now(),
+                });
+              }}
+              className="p-4 space-y-3 text-xs text-slate-800"
+            >
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Participante</label>
+                <input
+                  type="text"
+                  disabled
+                  value={editingContrib.member}
+                  className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2 font-bold text-slate-600 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Monto y Moneda</label>
+                <div className="flex gap-2">
+                  <input
+                    name="editAmount"
+                    type="number"
+                    min="0.01"
+                    step="any"
+                    defaultValue={editingContrib.amount}
+                    required
+                    className="flex-1 bg-white border border-slate-300 rounded-xl p-2 font-mono font-bold text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <select
+                    name="editCurrency"
+                    defaultValue={editingContrib.currency}
+                    className="w-24 bg-slate-50 border border-slate-300 rounded-xl p-2 font-bold text-slate-900 text-xs"
+                  >
+                    {ALL_CURRENCIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Fecha del Abono</label>
+                <input
+                  name="editDate"
+                  type="datetime-local"
+                  defaultValue={editingContrib.date ? new Date(editingContrib.date).toISOString().slice(0, 16) : ''}
+                  className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs text-slate-900 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Concepto / Nota</label>
+                <input
+                  name="editNote"
+                  type="text"
+                  defaultValue={editingContrib.note || ''}
+                  placeholder="Ej: Pago de pasajes..."
+                  className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs text-slate-900"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingContrib(null)}
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs cursor-pointer shadow-2xs"
+                >
+                  Guardar Cambios
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CONFIRMAR ELIMINAR ABONO */}
+      {contribToDelete && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 select-none">
+          <div className="bg-white rounded-2xl p-5 shadow-2xl border border-slate-200 max-w-sm w-full space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-full bg-rose-100 text-rose-600 shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-900 text-base">¿Eliminar este abono?</h4>
+                <p className="text-xs text-slate-500">Historial de abonos de la colecta</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-medium">Persona:</span>
+                <span className="font-bold text-slate-900 text-sm">{contribToDelete.member}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-medium">Monto abonado:</span>
+                <span className="font-mono font-bold text-blue-900 text-sm">
+                  {formatCurrency(contribToDelete.amount, contribToDelete.currency, 2)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-medium">Fecha:</span>
+                <span className="font-mono text-slate-700">{formatContributionDate(contribToDelete.date)}</span>
+              </div>
+              {contribToDelete.note && (
+                <div className="pt-1.5 border-t border-slate-200/70">
+                  <span className="text-slate-400 font-medium block text-[10px]">Concepto / Nota:</span>
+                  <span className="text-slate-700 italic font-medium">"{contribToDelete.note}"</span>
+                </div>
+              )}
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              El total recaudado se descontará inmediatamente y se recalcularán los porcentajes de avance de la meta.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setContribToDelete(null)}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteContribution(contribToDelete.id)}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Sí, eliminar abono</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: REGISTRAR ABONO RÁPIDO PARA EL PLANNER */}
+      {isQuickAbonoOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 select-none">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-sm w-full overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 bg-blue-900 text-white">
+              <div className="flex items-center gap-2">
+                <div className="p-1 rounded-md bg-white/20">
+                  <Plane className="w-4 h-4 text-emerald-300" />
+                </div>
+                <div>
+                  <h4 className="font-extrabold text-sm">Registrar Abono al Fondo</h4>
+                  <p className="text-[10.5px] text-blue-200">Planificación de Viaje & Colecta</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsQuickAbonoOpen(false)}
+                className="p-1 rounded-lg hover:bg-white/20 text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveQuickAbono} className="p-4 space-y-3.5 text-xs text-slate-800">
+              {/* Persona que abona */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">¿Quién realizó el abono?</label>
+                <select
+                  value={quickAbonoMember}
+                  onChange={(e) => setQuickAbonoMember(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                >
+                  {members.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Monto y Moneda */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Monto Abonado</label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="any"
+                    value={quickAbonoAmount}
+                    onChange={(e) => setQuickAbonoAmount(e.target.value)}
+                    placeholder="Ej: 50"
+                    autoFocus
+                    className="flex-1 bg-white border border-slate-300 rounded-xl p-2.5 font-mono font-bold text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <select
+                    value={quickAbonoCurrency}
+                    onChange={(e) => setQuickAbonoCurrency(e.target.value as Currency)}
+                    className="w-24 bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 text-xs focus:outline-none cursor-pointer"
+                  >
+                    {ALL_CURRENCIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Fecha del abono */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Fecha del Abono</label>
+                <input
+                  type="datetime-local"
+                  value={quickAbonoDate}
+                  onChange={(e) => setQuickAbonoDate(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {/* Concepto / Nota */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">
+                  Concepto / Nota <span className="text-slate-400 font-normal">(opcional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={quickAbonoNote}
+                  onChange={(e) => setQuickAbonoNote(e.target.value)}
+                  placeholder="Ej: Pago móvil Bs, Zelle, efectivo..."
+                  className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {quickAbonoError && (
+                <p className="text-[11px] text-rose-600 font-bold bg-rose-50 p-2 rounded-lg border border-rose-200">
+                  {quickAbonoError}
+                </p>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsQuickAbonoOpen(false)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                >
+                  <Check className="w-4 h-4 stroke-[3]" />
+                  <span>Confirmar y Guardar</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: AJUSTAR META TOTAL FUERA */}
+      {isEditingTargetOutside && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 select-none">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xs w-full p-4 space-y-3.5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <div className="flex items-center gap-2">
+                <div className="p-1 rounded bg-blue-100 text-blue-700">
+                  <Target className="w-4 h-4" />
+                </div>
+                <h4 className="font-extrabold text-sm text-slate-900">Ajustar Meta Total</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditingTargetOutside(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Monto Meta Total</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="any"
+                  value={outsideTargetInput}
+                  onChange={(e) => setOutsideTargetInput(e.target.value)}
+                  placeholder="Ej: 500"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-mono font-bold text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Moneda de la Meta</label>
+                <select
+                  value={outsideTargetCurrency}
+                  onChange={(e) => setOutsideTargetCurrency(e.target.value as Currency)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 text-xs focus:outline-none cursor-pointer"
+                >
+                  {ALL_CURRENCIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c} ({CURRENCY_CONFIG[c].name})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsEditingTargetOutside(false)}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const num = parseFloat(outsideTargetInput.replace(',', '.'));
+                  if (!isNaN(num) && num > 0) {
+                    const currentConfig = sheet.prepaidConfig || createDefaultPrepaidConfig(500, 'USD');
+                    const nextConfig = {
+                      ...currentConfig,
+                      targetAmount: num,
+                      targetCurrency: outsideTargetCurrency,
+                    };
+                    if (onUpdatePrepaidConfig) {
+                      onUpdatePrepaidConfig(nextConfig);
+                    }
+                  }
+                  setIsEditingTargetOutside(false);
+                }}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs cursor-pointer shadow-2xs transition-colors flex items-center gap-1"
+              >
+                <Check className="w-4 h-4 stroke-[3]" />
+                <span>Guardar Meta</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CONFIRMAR VACIAR CONTEXTUAL SEGÚN EL MODO ACTIVO */}
+      {confirmClearRows && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-slate-900/60 backdrop-blur-xs animate-fade-in select-none">
+          <div className="bg-white rounded-2xl p-4 sm:p-5 max-w-sm w-full shadow-2xl border border-slate-200 space-y-3.5">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2.5 rounded-full bg-rose-100 text-rose-600 shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-extrabold text-sm sm:text-base text-slate-900">
+                  {isPrepaidMode
+                    ? '¿Vaciar datos del Planner?'
+                    : isTricountActive
+                    ? '¿Vaciar datos de Tripcount?'
+                    : '¿Vaciar filas de la tabla?'}
+                </h4>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  {isPrepaidMode
+                    ? 'Limpia únicamente los abonos y cuotas del Planner'
+                    : isTricountActive
+                    ? 'Limpia únicamente los pagos y abonos parciales de Tripcount'
+                    : 'Limpia las operaciones de la tabla activa'}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-rose-50/70 border border-rose-200 text-rose-950 text-xs space-y-1.5 leading-relaxed">
+              <p className="font-bold">Se borrará únicamente:</p>
+              <ul className="list-disc list-inside space-y-0.5 text-[11px] font-medium text-rose-900">
+                {isPrepaidMode ? (
+                  <>
+                    <li>Historial de abonos del Planner ({sheet.prepaidConfig?.contributions?.length || 0} abonos)</li>
+                    <li>Cuotas personalizadas fijadas para la meta</li>
+                  </>
+                ) : isTricountActive ? (
+                  <>
+                    <li>Todas las deudas liquidadas de Tripcount</li>
+                    <li>Los abonos parciales registrados entre participantes</li>
+                  </>
+                ) : (
+                  <li>Todas las filas de operaciones ({sheet.rows?.length || 0} filas)</li>
+                )}
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setConfirmClearRows(false)}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (isPrepaidMode) {
+                    if (onUpdatePrepaidConfig) {
+                      onUpdatePrepaidConfig({
+                        ...(sheet.prepaidConfig || createDefaultPrepaidConfig(500, 'USD')),
+                        contributions: [],
+                        customQuotas: {},
+                      });
+                    }
+                  } else if (isTricountActive) {
+                    if (onUpdateSettledTransfers) onUpdateSettledTransfers({});
+                    if (onUpdateSettledDebtors) onUpdateSettledDebtors({});
+                    if (onUpdatePartialSettlements) onUpdatePartialSettlements({});
+                  } else {
+                    onClearRows();
+                  }
+                  setConfirmClearRows(false);
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+              >
+                <Trash2 className="w-4 h-4 stroke-[2.5]" />
+                <span>
+                  {isPrepaidMode
+                    ? 'Sí, Vaciar Planner'
+                    : isTricountActive
+                    ? 'Sí, Vaciar Tripcount'
+                    : 'Sí, Vaciar Filas'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* MODAL DE INFORMACIÓN DE FUNCIONES EN PULSACIÓN LARGA */}

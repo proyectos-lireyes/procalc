@@ -30,11 +30,45 @@ export interface SheetRow {
   note?: string;
 }
 
+export type TricountMode = 'postpaid' | 'prepaid';
+
+export interface TricountContribution {
+  id: string;
+  member: string;
+  amount: number;
+  currency: Currency;
+  date: number; // timestamp ms
+  note?: string;
+}
+
+export interface TricountGroup {
+  id: string;
+  name: string;
+  members: string[];
+  description?: string;
+  createdAt: number;
+}
+
+export type ExportImageScope = 'both' | 'planner' | 'tricount';
+
+export interface TricountPrepaidConfig {
+  targetAmount: number;
+  targetCurrency: Currency;
+  customQuotas?: Record<string, number>; // Custom target amount per member
+  contributions: TricountContribution[];
+}
+
 export interface Sheet {
   id: string;
   title: string;
   description?: string;
   isTricountActive?: boolean; // Whether tricount shared expenses is enabled for this account
+  tricountMode?: TricountMode; // 'postpaid' (gastos compartidos) or 'prepaid' (planificación de viaje / abonos)
+  tricountGroupId?: string; // ID of associated global Tricount group if linked
+  settledTransfers?: Record<string, boolean>; // e.g. "Pedro->Carlos": true -> paid / listo
+  settledDebtors?: Record<string, boolean>; // e.g. "Pedro": true -> all paid
+  partialSettlements?: Record<string, number>; // e.g. "Pedro->Carlos": 200 (monto abonado parcialmente)
+  prepaidConfig?: TricountPrepaidConfig;
   members?: string[]; // names of participants in this sheet
   rows: SheetRow[];
   variables: VariableItem[];

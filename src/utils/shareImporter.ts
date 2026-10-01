@@ -1,4 +1,4 @@
-import { Sheet, Currency } from '../types';
+import { Sheet, Currency, TricountMode, TricountPrepaidConfig } from '../types';
 import { TapeRow } from '../components/TapeCalculatorModal';
 
 export interface CalcSharePayload {
@@ -24,6 +24,11 @@ export interface SheetSharePayload {
   }>;
   members?: string[];
   isTricountActive?: boolean;
+  tricountMode?: TricountMode;
+  prepaidConfig?: TricountPrepaidConfig;
+  settledTransfers?: Record<string, boolean>;
+  settledDebtors?: Record<string, boolean>;
+  partialSettlements?: Record<string, number>;
   createdAt?: number;
 }
 
@@ -110,6 +115,11 @@ export function encodeSheetShare(sheet: Sheet): string {
     })),
     members: sheet.members,
     isTricountActive: sheet.isTricountActive,
+    tricountMode: sheet.tricountMode,
+    prepaidConfig: sheet.prepaidConfig,
+    settledTransfers: sheet.settledTransfers,
+    settledDebtors: sheet.settledDebtors,
+    partialSettlements: sheet.partialSettlements,
     createdAt: sheet.createdAt || Date.now(),
   };
 
@@ -134,6 +144,11 @@ export function getSheetBase64(sheet: Sheet): string {
     })),
     members: sheet.members,
     isTricountActive: sheet.isTricountActive,
+    tricountMode: sheet.tricountMode,
+    prepaidConfig: sheet.prepaidConfig,
+    settledTransfers: sheet.settledTransfers,
+    settledDebtors: sheet.settledDebtors,
+    partialSettlements: sheet.partialSettlements,
     createdAt: sheet.createdAt || Date.now(),
   };
 
@@ -190,6 +205,11 @@ export function parseSharedText(rawText: string): ParsedShareData | null {
             })),
             members: Array.isArray(sheetObj.members) ? sheetObj.members.map(String) : undefined,
             isTricountActive: Boolean(sheetObj.isTricountActive),
+            tricountMode: sheetObj.tricountMode,
+            prepaidConfig: sheetObj.prepaidConfig,
+            settledTransfers: sheetObj.settledTransfers,
+            settledDebtors: sheetObj.settledDebtors,
+            partialSettlements: sheetObj.partialSettlements,
             createdAt: sheetObj.createdAt || Date.now(),
           },
         };
@@ -246,6 +266,11 @@ export function parseSharedText(rawText: string): ParsedShareData | null {
             })),
             members: Array.isArray(data.members) ? data.members.map(String) : undefined,
             isTricountActive: Boolean(data.isTricountActive),
+            tricountMode: data.tricountMode,
+            prepaidConfig: data.prepaidConfig,
+            settledTransfers: data.settledTransfers,
+            settledDebtors: data.settledDebtors,
+            partialSettlements: data.partialSettlements,
             createdAt: data.createdAt || Date.now(),
           },
         };
@@ -291,6 +316,11 @@ export function parseSharedText(rawText: string): ParsedShareData | null {
               })),
               members: Array.isArray(data.members) ? data.members.map(String) : undefined,
               isTricountActive: Boolean(data.isTricountActive),
+              tricountMode: data.tricountMode,
+              prepaidConfig: data.prepaidConfig,
+              settledTransfers: data.settledTransfers,
+              settledDebtors: data.settledDebtors,
+              partialSettlements: data.partialSettlements,
               createdAt: data.createdAt || Date.now(),
             },
           };

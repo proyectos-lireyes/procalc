@@ -11,6 +11,7 @@ import {
   Sparkles,
   CheckCircle2,
   Info,
+  Users,
 } from 'lucide-react';
 import { AppSettings, Currency, RatesState } from '../types';
 import { ALL_CURRENCIES, CURRENCY_CONFIG } from '../utils/currency';
@@ -35,6 +36,8 @@ interface SettingsModalProps {
   onResetRatesToApi: () => void;
   initialReleaseInfo?: AppReleaseInfo | null;
   hasUpdateNotification?: boolean;
+  onOpenTricountGroups?: () => void;
+  tricountGroupsCount?: number;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -46,6 +49,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onResetRatesToApi,
   initialReleaseInfo,
   hasUpdateNotification,
+  onOpenTricountGroups,
+  tricountGroupsCount,
 }) => {
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -346,7 +351,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             )}
           </div>
-            {/* Section 4: Actualizaciones de la Aplicación */}
+          {/* Section: Grupos Tricount Generales */}
+          {onOpenTricountGroups && (
+            <div className="pt-3 border-t border-slate-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-indigo-600" />
+                    Grupos Tricount Reutilizables
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    Crea y gestiona grupos de personas para asociarlos a tus cuentas
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenTricountGroups();
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold border border-indigo-200 cursor-pointer transition-colors shadow-2xs flex items-center gap-1.5 shrink-0"
+                  title="Abrir administrador general de grupos"
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Gestionar ({tricountGroupsCount ?? 0})</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Section 4: Actualizaciones de la Aplicación */}
           <div className="pt-3 border-t border-slate-200 space-y-3">
             <div className="flex items-center justify-between">
               <div>
