@@ -3,6 +3,8 @@ import {
   RatesState,
   TricountPrepaidConfig,
   TricountContribution,
+  Sheet,
+  ComputedRow,
 } from '../types';
 import {
   convertCurrency,
@@ -62,13 +64,66 @@ export function resolveMemberForContribution(
 
 export function createDefaultPrepaidConfig(
   targetAmount = 0,
-  targetCurrency: Currency = 'USD'
+  targetCurrency: Currency = 'USD',
+  name = 'General',
+  id?: string
 ): TricountPrepaidConfig {
   return {
+    id: id || 'planner_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    name: name || 'General',
     targetAmount,
     targetCurrency,
     customQuotas: {},
     contributions: [],
+  };
+}
+
+export function getSheetPlanners(sheet: Sheet): TricountPrepaidConfig[] {
+  if (sheet.planners && sheet.planners.length > 0) {
+    return sheet.planners;
+  }
+  if (sheet.prepaidConfig) {
+    return [
+      {
+        ...sheet.prepaidConfig,
+        id: sheet.prepaidConfig.id || 'planner_default',
+        name: sheet.prepaidConfig.name || 'General',
+      },
+    ];
+  }
+  return [
+    {
+      id: 'planner_default',
+      name: 'General',
+      targetAmount: 0,
+      targetCurrency: 'USD',
+      customQuotas: {},
+      contributions: [],
+    },
+  ];
+}
+
+export function getActivePlanner(sheet: Sheet): TricountPrepaidConfig {
+  const planners = getSheetPlanners(sheet);
+  if (sheet.activePlannerId) {
+    const found = planners.find((p) => p.id === sheet.activePlannerId);
+    if (found) {
+      return {
+        ...found,
+        id: found.id || sheet.activePlannerId,
+        name: found.name || 'General',
+        contributions: found.contributions || [],
+        customQuotas: found.customQuotas || {},
+      };
+    }
+  }
+  const defaultPl = sheet.prepaidConfig || planners[0];
+  return {
+    ...defaultPl,
+    id: defaultPl.id || 'planner_default',
+    name: defaultPl.name || 'General',
+    contributions: defaultPl.contributions || [],
+    customQuotas: defaultPl.customQuotas || {},
   };
 }
 
@@ -228,13 +283,18 @@ export function formatPrepaidWhatsAppReport(
   sheetTitle: string,
   stats: PrepaidTripStats,
   decimals = 2,
-  options: FormatPrepaidReportOptions = { includeHistory: false, includeMulticurrencyRemaining: true }
+  options: FormatPrepaidReportOptions = { includeHistory: false, includeMulticurrencyRemaining: true },
+  plannerName?: string
 ): string {
   const curr = stats.baseCurrency;
   const includeHistory = options.includeHistory ?? false;
   const includeMulticurrencyRemaining = options.includeMulticurrencyRemaining ?? true;
 
-  let text = `🏖️ *PLANIFICACIÓN DE VIAJE / FONDO COMÚN*\n`;
+  const headerTitle = plannerName && plannerName !== 'General'
+    ? `🏖️ *PLANIFICACIÓN DE VIAJE / FONDO COMÚN: ${plannerName.toUpperCase()}*`
+    : `🏖️ *PLANIFICACIÓN DE VIAJE / FONDO COMÚN*`;
+
+  let text = `${headerTitle}\n`;
   text += `📂 *Cuenta:* ${sheetTitle}\n`;
   text += `🎯 *Meta total:* ${formatCurrency(stats.totalTargetInBase, curr, decimals)}\n`;
   text += `💰 *Recaudado:* ${formatCurrency(stats.totalCollectedInBase, curr, decimals)} (${stats.progressPercent.toFixed(1)}%)\n`;
@@ -250,7 +310,16 @@ export function formatPrepaidWhatsAppReport(
   text += `───────────────────────────\n`;
   text += `📋 *ESTADO POR PARTICIPANTE:*\n\n`;
 
-  stats.membersStats.forEach((m) => {
+  // Organizar: primero los que deben (alfabético) y luego los que ya pagaron (alfabético)
+  const sortedMembers = [...stats.membersStats].sort((a, b) => {
+    const aOwes = !a.isCompleted && a.remainingInBase > 0.009;
+    const bOwes = !b.isCompleted && b.remainingInBase > 0.009;
+    if (aOwes && !bOwes) return -1;
+    if (!aOwes && bOwes) return 1;
+    return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
+  });
+
+  sortedMembers.forEach((m) => {
     if (m.isCompleted) {
       text += `✅ *${m.name}*: ¡Cuota Completa! 🎉\n`;
       text += `   • Aportó: ${formatCurrency(m.collectedInBase, curr, decimals)} de ${formatCurrency(m.quotaInBase, curr, decimals)} (100%)\n`;
@@ -291,4 +360,127 @@ export function formatPrepaidWhatsAppReport(
 
   text += `_Calculado con ProCalc_`;
   return text;
+}
+
+export interface PostpaidTransfer {
+  from: string;
+  to: string;
+  amount: number;
+  amountsInAllCurrencies: Record<Currency, number>;
+}
+
+export interface PostpaidSplitStats {
+  totalSharedExpense: number;
+  fairShare: number;
+  paidByPerson: Record<string, number>;
+  consumedByPerson: Record<string, number>;
+  balances: Record<string, number>;
+  debtors: Array<{ name: string; amount: number }>;
+  creditors: Array<{ name: string; amount: number }>;
+  transfers: PostpaidTransfer[];
+}
+
+export function calculatePostpaidStats(
+  members: string[],
+  computedRows: ComputedRow[],
+  settleCurrency: Currency,
+  rates: RatesState
+): PostpaidSplitStats {
+  const activeMembers = members.length > 0 ? members : ['Yo'];
+  const paidByPerson: Record<string, number> = {};
+  const consumedByPerson: Record<string, number> = {};
+
+  activeMembers.forEach((m) => {
+    paidByPerson[m] = 0;
+    consumedByPerson[m] = 0;
+  });
+
+  let totalSharedExpense = 0;
+
+  computedRows.forEach((row) => {
+    if (!row.isValid) return;
+    const rowAmtInSettle = Math.abs(row.equivalents[settleCurrency]);
+    if (rowAmtInSettle <= 0) return;
+
+    const payer = row.payer && activeMembers.includes(row.payer) ? row.payer : activeMembers[0];
+    paidByPerson[payer] = (paidByPerson[payer] || 0) + rowAmtInSettle;
+    totalSharedExpense += rowAmtInSettle;
+
+    // Beneficiaries / participants in this expense
+    const validParticipants = (row.participants && row.participants.length > 0)
+      ? row.participants.filter((p) => activeMembers.includes(p))
+      : activeMembers;
+    const effectiveParticipants = validParticipants.length > 0 ? validParticipants : activeMembers;
+
+    const perPersonShare = rowAmtInSettle / effectiveParticipants.length;
+    effectiveParticipants.forEach((p) => {
+      consumedByPerson[p] = (consumedByPerson[p] || 0) + perPersonShare;
+    });
+  });
+
+  const balances: Record<string, number> = {};
+  activeMembers.forEach((m) => {
+    balances[m] = (paidByPerson[m] || 0) - (consumedByPerson[m] || 0);
+  });
+
+  const debtors: Array<{ name: string; amount: number }> = [];
+  const creditors: Array<{ name: string; amount: number }> = [];
+
+  activeMembers.forEach((m) => {
+    const bal = balances[m] || 0;
+    if (bal < -0.009) {
+      debtors.push({ name: m, amount: Math.abs(bal) });
+    } else if (bal > 0.009) {
+      creditors.push({ name: m, amount: bal });
+    }
+  });
+
+  debtors.sort((a, b) => b.amount - a.amount);
+  creditors.sort((a, b) => b.amount - a.amount);
+
+  const transfers: PostpaidTransfer[] = [];
+  let dIdx = 0;
+  let cIdx = 0;
+  const dCopy = debtors.map((d) => ({ ...d }));
+  const cCopy = creditors.map((c) => ({ ...c }));
+
+  while (dIdx < dCopy.length && cIdx < cCopy.length) {
+    const debtor = dCopy[dIdx];
+    const creditor = cCopy[cIdx];
+    const transferAmt = Math.min(debtor.amount, creditor.amount);
+
+    if (transferAmt > 0.001) {
+      const amtInVES = convertToVES(transferAmt, settleCurrency, rates);
+      transfers.push({
+        from: debtor.name,
+        to: creditor.name,
+        amount: transferAmt,
+        amountsInAllCurrencies: {
+          USD: convertCurrency(transferAmt, settleCurrency, 'USD', rates),
+          VES: amtInVES,
+          EUR: convertCurrency(transferAmt, settleCurrency, 'EUR', rates),
+          USDT: convertCurrency(transferAmt, settleCurrency, 'USDT', rates),
+        },
+      });
+    }
+
+    debtor.amount -= transferAmt;
+    creditor.amount -= transferAmt;
+
+    if (debtor.amount <= 0.009) dIdx++;
+    if (creditor.amount <= 0.009) cIdx++;
+  }
+
+  const fairShare = activeMembers.length > 0 ? totalSharedExpense / activeMembers.length : 0;
+
+  return {
+    totalSharedExpense,
+    fairShare,
+    paidByPerson,
+    consumedByPerson,
+    balances,
+    debtors,
+    creditors,
+    transfers,
+  };
 }

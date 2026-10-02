@@ -52,6 +52,8 @@ export interface TricountGroup {
 export type ExportImageScope = 'both' | 'planner' | 'tricount';
 
 export interface TricountPrepaidConfig {
+  id?: string;
+  name?: string; // e.g. "Traslado", "Estadía", "Comida", "General"
   targetAmount: number;
   targetCurrency: Currency;
   customQuotas?: Record<string, number>; // Custom target amount per member
@@ -69,6 +71,8 @@ export interface Sheet {
   settledDebtors?: Record<string, boolean>; // e.g. "Persona1": true -> all paid
   partialSettlements?: Record<string, number>; // e.g. "Persona1->Persona2": 200 (monto abonado parcialmente)
   prepaidConfig?: TricountPrepaidConfig;
+  planners?: TricountPrepaidConfig[]; // Multiple planners per sheet (e.g. Traslado, Estadía, Comida)
+  activePlannerId?: string; // ID of currently active planner
   members?: string[]; // names of participants in this sheet
   rows: SheetRow[];
   variables: VariableItem[];

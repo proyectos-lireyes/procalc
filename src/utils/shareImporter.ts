@@ -21,11 +21,14 @@ export interface SheetSharePayload {
     expression: string;
     currency: Currency;
     payer?: string;
+    participants?: string[];
   }>;
   members?: string[];
   isTricountActive?: boolean;
   tricountMode?: TricountMode;
   prepaidConfig?: TricountPrepaidConfig;
+  planners?: TricountPrepaidConfig[];
+  activePlannerId?: string;
   settledTransfers?: Record<string, boolean>;
   settledDebtors?: Record<string, boolean>;
   partialSettlements?: Record<string, number>;
@@ -112,11 +115,14 @@ export function encodeSheetShare(sheet: Sheet): string {
       expression: r.expression || '0',
       currency: r.currency || 'USD',
       payer: r.payer,
+      participants: r.participants,
     })),
     members: sheet.members,
     isTricountActive: sheet.isTricountActive,
     tricountMode: sheet.tricountMode,
     prepaidConfig: sheet.prepaidConfig,
+    planners: sheet.planners,
+    activePlannerId: sheet.activePlannerId,
     settledTransfers: sheet.settledTransfers,
     settledDebtors: sheet.settledDebtors,
     partialSettlements: sheet.partialSettlements,
@@ -141,11 +147,14 @@ export function getSheetBase64(sheet: Sheet): string {
       expression: r.expression || '0',
       currency: r.currency || 'USD',
       payer: r.payer,
+      participants: r.participants,
     })),
     members: sheet.members,
     isTricountActive: sheet.isTricountActive,
     tricountMode: sheet.tricountMode,
     prepaidConfig: sheet.prepaidConfig,
+    planners: sheet.planners,
+    activePlannerId: sheet.activePlannerId,
     settledTransfers: sheet.settledTransfers,
     settledDebtors: sheet.settledDebtors,
     partialSettlements: sheet.partialSettlements,
@@ -202,11 +211,14 @@ export function parseSharedText(rawText: string): ParsedShareData | null {
               expression: String(r.expression || '0'),
               currency: (['USD', 'VES', 'EUR', 'USDT'].includes(r.currency) ? r.currency : 'USD') as Currency,
               payer: r.payer ? String(r.payer) : undefined,
+              participants: Array.isArray(r.participants) ? r.participants.map(String) : undefined,
             })),
             members: Array.isArray(sheetObj.members) ? sheetObj.members.map(String) : undefined,
             isTricountActive: Boolean(sheetObj.isTricountActive),
             tricountMode: sheetObj.tricountMode,
             prepaidConfig: sheetObj.prepaidConfig,
+            planners: Array.isArray(sheetObj.planners) ? sheetObj.planners : undefined,
+            activePlannerId: sheetObj.activePlannerId ? String(sheetObj.activePlannerId) : undefined,
             settledTransfers: sheetObj.settledTransfers,
             settledDebtors: sheetObj.settledDebtors,
             partialSettlements: sheetObj.partialSettlements,
@@ -263,11 +275,14 @@ export function parseSharedText(rawText: string): ParsedShareData | null {
               expression: String(r.expression || '0'),
               currency: (['USD', 'VES', 'EUR', 'USDT'].includes(r.currency) ? r.currency : 'USD') as Currency,
               payer: r.payer ? String(r.payer) : undefined,
+              participants: Array.isArray(r.participants) ? r.participants.map(String) : undefined,
             })),
             members: Array.isArray(data.members) ? data.members.map(String) : undefined,
             isTricountActive: Boolean(data.isTricountActive),
             tricountMode: data.tricountMode,
             prepaidConfig: data.prepaidConfig,
+            planners: Array.isArray(data.planners) ? data.planners : undefined,
+            activePlannerId: data.activePlannerId ? String(data.activePlannerId) : undefined,
             settledTransfers: data.settledTransfers,
             settledDebtors: data.settledDebtors,
             partialSettlements: data.partialSettlements,
@@ -313,11 +328,14 @@ export function parseSharedText(rawText: string): ParsedShareData | null {
                 expression: String(r.expression || '0'),
                 currency: (['USD', 'VES', 'EUR', 'USDT'].includes(r.currency) ? r.currency : 'USD') as Currency,
                 payer: r.payer ? String(r.payer) : undefined,
+                participants: Array.isArray(r.participants) ? r.participants.map(String) : undefined,
               })),
               members: Array.isArray(data.members) ? data.members.map(String) : undefined,
               isTricountActive: Boolean(data.isTricountActive),
               tricountMode: data.tricountMode,
               prepaidConfig: data.prepaidConfig,
+              planners: Array.isArray(data.planners) ? data.planners : undefined,
+              activePlannerId: data.activePlannerId ? String(data.activePlannerId) : undefined,
               settledTransfers: data.settledTransfers,
               settledDebtors: data.settledDebtors,
               partialSettlements: data.partialSettlements,

@@ -16,6 +16,8 @@ import {
   Plane,
   CheckCircle2,
   MessageSquare,
+  FileText,
+  Printer,
 } from 'lucide-react';
 import {
   Sheet,
@@ -24,16 +26,27 @@ import {
   RatesState,
   AppSettings,
   ExportImageScope,
+  Currency,
 } from '../types';
 import { encodeSheetShare } from '../utils/shareImporter';
-import { formatCurrency, formatNumber, convertCurrency, convertToVES } from '../utils/currency';
-import { calculatePrepaidTripStats, formatPrepaidWhatsAppReport } from '../utils/tricountPrepaid';
+import { formatCurrency, formatNumber, convertCurrency, convertToVES, CURRENCY_CONFIG } from '../utils/currency';
+import {
+  calculatePrepaidTripStats,
+  formatPrepaidWhatsAppReport,
+  calculatePostpaidStats,
+  getSheetPlanners,
+  getActivePlanner,
+} from '../utils/tricountPrepaid';
 import {
   captureElementToPng,
   copyImageMediaToClipboard,
   shareImageMedia,
   downloadImageMedia,
 } from '../utils/mediaShare';
+import {
+  generatePdfFromCanvas,
+  downloadHtmlReport,
+} from '../utils/reportExporter';
 
 interface ExportReportModalProps {
   isOpen: boolean;
@@ -66,17 +79,34 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
   const [copiedJson, setCopiedJson] = useState(false);
   const [copiedWhatsAppText, setCopiedWhatsAppText] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [includePlanners, setIncludePlanners] = useState(true);
+  const [includeFullTable, setIncludeFullTable] = useState(true);
+  const [includeSettlement, setIncludeSettlement] = useState(true);
   const [includeContributionsHistory, setIncludeContributionsHistory] = useState(false);
   const [includeMulticurrencyRemaining, setIncludeMulticurrencyRemaining] = useState(true);
+  const [includeTripcountRows, setIncludeTripcountRows] = useState(true);
+  const [includeTripcountParticipantsBreakdown, setIncludeTripcountParticipantsBreakdown] = useState(false);
+  const [includeTripcountHistory, setIncludeTripcountHistory] = useState(false);
+  const [selectedCurrencies, setSelectedCurrencies] = useState<Currency[]>(['USD', 'VES', 'USDT', 'EUR']);
   const [statusMessage, setStatusMessage] = useState<{
     text: string;
     type: 'success' | 'info' | 'error';
   } | null>(null);
 
+  const toggleCurrency = (c: Currency) => {
+    setSelectedCurrencies((prev) => {
+      if (prev.includes(c)) {
+        if (prev.length <= 1) return prev; // Keep at least one
+        return prev.filter((item) => item !== c);
+      } else {
+        return [...prev, c];
+      }
+    });
+  };
+
   const receiptRef = useRef<HTMLDivElement>(null);
 
-  const members = sheet.members || [];
-  const isTricountActive = Boolean(sheet.isTricountActive && members.length > 0);
+  const members = sheet.members && sheet.members.length > 0 ? sheet.members : ['Yo'];
   const settleCurrency = settings.displayCurrency;
 
   // Auto-select default tab when opening modal
@@ -92,96 +122,123 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
     }
   }, [isOpen, sheet.id, sheet.isTricountActive, sheet.tricountMode]);
 
-  const plannerCurrency = sheet.prepaidConfig?.targetCurrency || settings.displayCurrency;
+  const sheetPlanners = useMemo(() => getSheetPlanners(sheet), [sheet]);
+  const defaultPlanner = useMemo(() => getActivePlanner(sheet), [sheet]);
+  const [selectedPlannerId, setSelectedPlannerId] = useState<string>(
+    sheet.activePlannerId || defaultPlanner.id || 'planner_default'
+  );
+
+  useEffect(() => {
+    if (sheet.activePlannerId) {
+      setSelectedPlannerId(sheet.activePlannerId);
+    } else if (defaultPlanner.id) {
+      setSelectedPlannerId(defaultPlanner.id);
+    }
+  }, [sheet.activePlannerId, defaultPlanner.id]);
+
+  const activePlanner = useMemo(() => {
+    return sheetPlanners.find((p) => p.id === selectedPlannerId) || defaultPlanner;
+  }, [sheetPlanners, selectedPlannerId, defaultPlanner]);
+
+  const plannerCurrency = activePlanner.targetCurrency || settings.displayCurrency;
 
   // Compute Prepaid Trip Stats if active or configured
   const prepaidData = useMemo(() => {
-    return calculatePrepaidTripStats(members, sheet.prepaidConfig, rates, plannerCurrency);
-  }, [members, sheet.prepaidConfig, rates, plannerCurrency]);
+    return calculatePrepaidTripStats(members, activePlanner, rates, plannerCurrency);
+  }, [members, activePlanner, rates, plannerCurrency]);
 
-  // Compute Tripcount statistics
-  const tricountData = useMemo(() => {
-    if (!isTricountActive) return null;
+  // Compute Tripcount statistics taking row-level participant exemptions into account
+  const postpaidStats = useMemo(() => {
+    return calculatePostpaidStats(members, computedRows, settleCurrency, rates);
+  }, [members, computedRows, settleCurrency, rates]);
 
-    const paidByPerson: Record<string, number> = {};
-    members.forEach((m) => {
-      paidByPerson[m] = 0;
+  // Backward compatibility alias for template sections
+  const tricountData = postpaidStats;
+
+  // Sorted list for Planner Image Export:
+  // "al compartir las imagenes, organiza por nombre alfabetico y pon primero los que deben y luego los que ya pagaron."
+  const sortedPlannerMembers = useMemo(() => {
+    if (!prepaidData) return [];
+    const list = [...prepaidData.membersStats];
+    list.sort((a, b) => {
+      const aOwes = !a.isCompleted && a.remainingInBase > 0.009;
+      const bOwes = !b.isCompleted && b.remainingInBase > 0.009;
+      if (aOwes && !bOwes) return -1;
+      if (!aOwes && bOwes) return 1;
+      return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
+    });
+    return list;
+  }, [prepaidData]);
+
+  // Sorted list for Tripcount Image Export:
+  // First: members who owe (bal < -0.009) sorted alphabetically by name
+  // Next: members who don't owe (bal >= -0.009) sorted alphabetically by name
+  const sortedTripcountMembers = useMemo(() => {
+    if (!postpaidStats) return [];
+    const list = [...members];
+    list.sort((a, b) => {
+      const aBal = postpaidStats.balances[a] || 0;
+      const bBal = postpaidStats.balances[b] || 0;
+      const aOwes = aBal < -0.009;
+      const bOwes = bBal < -0.009;
+      if (aOwes && !bOwes) return -1;
+      if (!aOwes && bOwes) return 1;
+      return a.localeCompare(b, 'es', { sensitivity: 'base' });
+    });
+    return list;
+  }, [members, postpaidStats]);
+
+  // Sorted transfers for Tripcount Image Export:
+  // First: pending transfers (alphabetical by debtor from, then creditor to)
+  // Next: settled transfers (alphabetical by debtor from, then creditor to)
+  const sortedTripcountTransfers = useMemo(() => {
+    if (!postpaidStats) return [];
+    const list = [...postpaidStats.transfers];
+    list.sort((a, b) => {
+      const aSettled = Boolean(
+        sheet.settledTransfers?.[`${a.from}->${a.to}`] || sheet.settledDebtors?.[a.from]
+      );
+      const bSettled = Boolean(
+        sheet.settledTransfers?.[`${b.from}->${b.to}`] || sheet.settledDebtors?.[b.from]
+      );
+      if (!aSettled && bSettled) return -1;
+      if (aSettled && !bSettled) return 1;
+      const cmpFrom = a.from.localeCompare(b.from, 'es', { sensitivity: 'base' });
+      if (cmpFrom !== 0) return cmpFrom;
+      return a.to.localeCompare(b.to, 'es', { sensitivity: 'base' });
+    });
+    return list;
+  }, [postpaidStats, sheet.settledTransfers, sheet.settledDebtors]);
+
+  // Consolidated Totals for the whole Account (Sum of all Planners + Tripcount)
+  const consolidatedAccountTotals = useMemo(() => {
+    let plannersTargetTotal = 0;
+    let plannersCollectedTotal = 0;
+    let plannersRemainingTotal = 0;
+
+    sheetPlanners.forEach((p) => {
+      const pCurr = p.targetCurrency || settings.displayCurrency;
+      const stats = calculatePrepaidTripStats(members, p, rates, pCurr);
+      const targetInSettle = convertCurrency(stats.totalTargetInBase, pCurr, settleCurrency, rates);
+      const collectedInSettle = convertCurrency(stats.totalCollectedInBase, pCurr, settleCurrency, rates);
+      const remainingInSettle = convertCurrency(stats.totalRemainingInBase, pCurr, settleCurrency, rates);
+
+      plannersTargetTotal += targetInSettle;
+      plannersCollectedTotal += collectedInSettle;
+      plannersRemainingTotal += remainingInSettle;
     });
 
-    let totalShared = 0;
-    computedRows.forEach((row) => {
-      const val = Math.abs(row.equivalents[settleCurrency]);
-      const payer = row.payer && members.includes(row.payer) ? row.payer : members[0];
-      if (payer && val > 0) {
-        paidByPerson[payer] = (paidByPerson[payer] || 0) + val;
-        totalShared += val;
-      }
-    });
-
-    const fairShare = members.length > 0 ? totalShared / members.length : 0;
-    const balances: Record<string, number> = {};
-    members.forEach((m) => {
-      balances[m] = (paidByPerson[m] || 0) - fairShare;
-    });
-
-    const debtors: Array<{ name: string; balance: number }> = [];
-    const creditors: Array<{ name: string; balance: number }> = [];
-
-    members.forEach((m) => {
-      const bal = balances[m] || 0;
-      if (bal < -0.009) debtors.push({ name: m, balance: -bal });
-      else if (bal > 0.009) creditors.push({ name: m, balance: bal });
-    });
-
-    const transfers: Array<{
-      from: string;
-      to: string;
-      amount: number;
-      inUSD: number;
-      inVES: number;
-      inEUR: number;
-      inUSDT: number;
-    }> = [];
-
-    let dIdx = 0;
-    let cIdx = 0;
-    const dCopy = debtors.map((d) => ({ ...d }));
-    const cCopy = creditors.map((c) => ({ ...c }));
-
-    while (dIdx < dCopy.length && cIdx < cCopy.length) {
-      const d = dCopy[dIdx];
-      const c = cCopy[cIdx];
-      const amt = Math.min(d.balance, c.balance);
-      if (amt > 0.001) {
-        const inVES = convertToVES(amt, settleCurrency, rates);
-        const inUSD = convertCurrency(amt, settleCurrency, 'USD', rates);
-        const inEUR = convertCurrency(amt, settleCurrency, 'EUR', rates);
-        const inUSDT = convertCurrency(amt, settleCurrency, 'USDT', rates);
-
-        transfers.push({
-          from: d.name,
-          to: c.name,
-          amount: amt,
-          inVES,
-          inUSD,
-          inEUR,
-          inUSDT,
-        });
-      }
-      d.balance -= amt;
-      c.balance -= amt;
-      if (d.balance <= 0.009) dIdx++;
-      if (c.balance <= 0.009) cIdx++;
-    }
+    const tripcountTotal = postpaidStats.totalSharedExpense;
+    const grandTotal = plannersTargetTotal + tripcountTotal;
 
     return {
-      totalShared,
-      fairShare,
-      paidByPerson,
-      balances,
-      transfers,
+      grandTotal,
+      plannersTargetTotal,
+      plannersCollectedTotal,
+      plannersRemainingTotal,
+      tripcountTotal,
     };
-  }, [isTricountActive, members, computedRows, settleCurrency, rates]);
+  }, [sheetPlanners, members, rates, settings.displayCurrency, settleCurrency, postpaidStats]);
 
   if (!isOpen) return null;
 
@@ -193,7 +250,7 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
   // 1. Base64
   const sheetBase64 = encodeSheetShare(sheet);
 
-  // 2. Structured JSON
+  // 2. Structured JSON (shares everything: group, planners, tripcount, abonos, pagos)
   const sheetJsonString = JSON.stringify(
     {
       app: 'ProCalc',
@@ -203,12 +260,15 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
       sheet: {
         id: sheet.id,
         title: sheet.title,
-        currency: sheet.currency,
+        currency: (sheet as any).currency,
         isTricountActive: sheet.isTricountActive,
         tricountMode: sheet.tricountMode,
+        tricountGroupId: sheet.tricountGroupId,
         members: sheet.members,
-        payer: sheet.payer,
+        payer: (sheet as any).payer,
         prepaidConfig: sheet.prepaidConfig,
+        planners: sheet.planners,
+        activePlannerId: sheet.activePlannerId,
         settledTransfers: sheet.settledTransfers,
         settledDebtors: sheet.settledDebtors,
         partialSettlements: sheet.partialSettlements,
@@ -221,6 +281,64 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
   );
 
   const reportFileName = `${sheet.title.replace(/\s+/g, '_')}_${imageScope}_reporte.png`;
+
+  // Download PDF Report Document
+  const handleDownloadPdf = async () => {
+    if (!receiptRef.current) return;
+    setIsGenerating(true);
+    setStatusMessage(null);
+    try {
+      const pdfFileName = `${sheet.title.replace(/\s+/g, '_')}_${imageScope}_reporte.pdf`;
+      const res = await generatePdfFromCanvas(receiptRef.current, pdfFileName, sheet.title);
+      if (res.success) {
+        setStatusMessage({
+          text: '¡Documento PDF descargado exitosamente!',
+          type: 'success',
+        });
+      } else {
+        setStatusMessage({
+          text: res.error || 'No se pudo generar el PDF.',
+          type: 'error',
+        });
+      }
+    } catch (err) {
+      console.error('handleDownloadPdf failed:', err);
+      setStatusMessage({ text: 'Error al generar el archivo PDF.', type: 'error' });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Download Standalone HTML Report
+  const handleDownloadHtml = () => {
+    try {
+      const htmlFileName = `${sheet.title.replace(/\s+/g, '_')}_${imageScope}_reporte.html`;
+      downloadHtmlReport(
+        sheet,
+        computedRows,
+        totals,
+        rates,
+        settings,
+        {
+          includePlanners,
+          includeTripcountRows,
+          includeParticipantsBreakdown: includeTripcountParticipantsBreakdown,
+          includeSettlement,
+          includeHistory: includeTripcountHistory,
+          includeFullTable,
+          selectedCurrencies,
+        },
+        htmlFileName
+      );
+      setStatusMessage({
+        text: '¡Reporte HTML descargado con éxito!',
+        type: 'success',
+      });
+    } catch (err) {
+      console.error('handleDownloadHtml failed:', err);
+      setStatusMessage({ text: 'Error al exportar archivo HTML.', type: 'error' });
+    }
+  };
 
   // Copy Image to Clipboard (Cross-platform Android / Web)
   const handleCopyImage = async () => {
@@ -334,13 +452,68 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
     }
   };
 
-  // Copy WhatsApp Text Report
+  // Copy WhatsApp Text Report (Supports both Planner and Tripcount Postpaid)
   const handleCopyWhatsAppText = async () => {
-    if (!prepaidData) return;
-    const text = formatPrepaidWhatsAppReport(sheet.title, prepaidData, settings.decimals, {
-      includeHistory: includeContributionsHistory,
-      includeMulticurrencyRemaining: includeMulticurrencyRemaining,
-    });
+    let text = '';
+    const isPlannerSelected =
+      imageScope === 'planner' || (imageScope === 'both' && sheet.tricountMode === 'prepaid');
+
+    if (isPlannerSelected && prepaidData) {
+      text = formatPrepaidWhatsAppReport(
+        sheet.title,
+        prepaidData,
+        settings.decimals,
+        {
+          includeHistory: includeContributionsHistory,
+          includeMulticurrencyRemaining: includeMulticurrencyRemaining,
+        },
+        activePlanner.name
+      );
+    } else if (postpaidStats) {
+      text = `👥 *TRIPCOUNT / GASTOS COMPARTIDOS*\n`;
+      text += `📂 *Cuenta:* ${sheet.title}\n`;
+      text += `💰 *Gasto Total Compartido:* ${formatCurrency(postpaidStats.totalSharedExpense, settleCurrency, settings.decimals)}\n`;
+      text += `🤝 *Cuota por persona:* ${formatCurrency(postpaidStats.fairShare, settleCurrency, settings.decimals)}\n`;
+      text += `───────────────────────────\n`;
+      text += `📊 *PAGOS Y SALDOS (Primero los que deben):*\n\n`;
+
+      sortedTripcountMembers.forEach((m) => {
+        const paid = postpaidStats.paidByPerson[m] || 0;
+        const bal = postpaidStats.balances[m] || 0;
+        const status =
+          bal > 0.01
+            ? `(recibe +${formatCurrency(bal, settleCurrency, settings.decimals)})`
+            : bal < -0.01
+            ? `(debe ${formatCurrency(Math.abs(bal), settleCurrency, settings.decimals)})`
+            : `(al día)`;
+        text += `• *${m}*: pagó ${formatCurrency(paid, settleCurrency, settings.decimals)} ${status}\n`;
+      });
+
+      text += `\n───────────────────────────\n`;
+      text += `💸 *LIQUIDACIÓN: ¿QUIÉN LE DEBE A QUIÉN?*\n`;
+      if (sortedTripcountTransfers.length === 0) {
+        text += `✅ ¡Todos están al día! Nadie se debe nada.\n`;
+      } else {
+        sortedTripcountTransfers.forEach((t) => {
+          const transferKey = `${t.from}->${t.to}`;
+          const isSettled = Boolean(sheet.settledTransfers?.[transferKey] || sheet.settledDebtors?.[t.from]);
+          if (isSettled) {
+            text += `\n✅ *[LISTO / YA PAGÓ]* *${t.from}* ➔ *${t.to}*: ${formatCurrency(t.amountsInAllCurrencies.USD, 'USD', settings.decimals)} (Liquidado)\n`;
+          } else {
+            text += `\n⏳ *[PENDIENTE]* *${t.from}* le paga a *${t.to}*:\n`;
+            text += `   • ${formatCurrency(t.amountsInAllCurrencies.USD, 'USD', settings.decimals)} (Dólares)\n`;
+            text += `   • ${formatCurrency(t.amountsInAllCurrencies.VES, 'VES', settings.decimals)} (Bolívares)\n`;
+            text += `   • ${formatCurrency(t.amountsInAllCurrencies.USDT, 'USDT', settings.decimals)} (USDT)\n`;
+            text += `   • ${formatCurrency(t.amountsInAllCurrencies.EUR, 'EUR', settings.decimals)} (Euros)\n`;
+          }
+        });
+      }
+      text += `\n───────────────────────────\n`;
+      text += `_Calculado con ProCalc_`;
+    }
+
+    if (!text) return;
+
     try {
       await navigator.clipboard.writeText(text);
       setCopiedWhatsAppText(true);
@@ -570,33 +743,194 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                     </button>
                   </div>
                 )}
+
+                {/* Opciones adicionales para Tripcount: Filas, Desglose por Persona e Historial */}
+                {imageScope === 'tricount' && (
+                  <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-200 text-[11px] flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setIncludeTripcountRows((prev) => !prev)}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10.5px] border ${
+                        includeTripcountRows
+                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3.5 h-3.5 ${includeTripcountRows ? 'text-emerald-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>1. Pagos por fila</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIncludeTripcountParticipantsBreakdown((prev) => !prev)}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10.5px] border ${
+                        includeTripcountParticipantsBreakdown
+                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3.5 h-3.5 ${includeTripcountParticipantsBreakdown ? 'text-emerald-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>Gastos por persona</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIncludeTripcountHistory((prev) => !prev)}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10.5px] border ${
+                        includeTripcountHistory
+                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3.5 h-3.5 ${includeTripcountHistory ? 'text-emerald-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>3. Historial</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Opciones para Reporte Completo (Planners + Tripcount + Tabla) */}
+                {imageScope === 'both' && (
+                  <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-200 text-[11px] flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setIncludePlanners((prev) => !prev)}
+                      className={`px-2 py-0.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10px] border ${
+                        includePlanners
+                          ? 'bg-blue-100 text-blue-900 border-blue-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3 h-3 ${includePlanners ? 'text-blue-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>Planners ({sheetPlanners.length})</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIncludeTripcountRows((prev) => !prev)}
+                      className={`px-2 py-0.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10px] border ${
+                        includeTripcountRows
+                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3 h-3 ${includeTripcountRows ? 'text-emerald-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>Gastos Tripcount</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIncludeTripcountParticipantsBreakdown((prev) => !prev)}
+                      className={`px-2 py-0.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10px] border ${
+                        includeTripcountParticipantsBreakdown
+                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3 h-3 ${includeTripcountParticipantsBreakdown ? 'text-emerald-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>Por persona</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIncludeSettlement((prev) => !prev)}
+                      className={`px-2 py-0.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10px] border ${
+                        includeSettlement
+                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3 h-3 ${includeSettlement ? 'text-emerald-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>Liquidación</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIncludeFullTable((prev) => !prev)}
+                      className={`px-2 py-0.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10px] border ${
+                        includeFullTable
+                          ? 'bg-indigo-100 text-indigo-900 border-indigo-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3 h-3 ${includeFullTable ? 'text-indigo-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>Tabla Filas</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIncludeTripcountHistory((prev) => !prev)}
+                      className={`px-2 py-0.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 text-[10px] border ${
+                        includeTripcountHistory
+                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300 shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Check className={`w-3 h-3 ${includeTripcountHistory ? 'text-emerald-600 stroke-[3]' : 'opacity-20'}`} />
+                      <span>Historial</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Selector de Monedas a incluir en la imagen */}
+                <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-200 text-[11px] flex-wrap">
+                  <span className="text-[10px] font-bold text-slate-600 uppercase shrink-0">Monedas en imagen:</span>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {(['USD', 'VES', 'USDT', 'EUR'] as Currency[]).map((c) => {
+                      const isChecked = selectedCurrencies.includes(c);
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => toggleCurrency(c)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer border ${
+                            isChecked
+                              ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs'
+                              : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          {c === 'USD' ? '$ USD' : c === 'VES' ? 'Bs VES' : c === 'USDT' ? '₮ USDT' : '€ EUR'}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCurrencies(['USD', 'VES', 'USDT', 'EUR'])}
+                      className="px-1.5 py-0.5 rounded text-[9.5px] font-semibold text-indigo-700 hover:underline cursor-pointer"
+                    >
+                      (Todas 4)
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Scrollable Container with Complete Report Canvas inside */}
               <div className="w-full bg-slate-100/80 p-2 sm:p-4 rounded-2xl border border-slate-200 overflow-y-auto max-h-[58vh] touch-pan-y overscroll-contain flex justify-center">
                 <div
                   ref={receiptRef}
-                  className="bg-white rounded-2xl shadow-md border border-slate-200/90 p-5 sm:p-6 w-full max-w-[420px] text-slate-800 font-sans space-y-4"
+                  className="bg-white rounded-2xl shadow-md border border-slate-200/90 p-4 sm:p-5 w-full max-w-[600px] text-slate-800 font-sans space-y-3.5"
                   style={{ minWidth: '320px' }}
                 >
                   {/* 1. Header del Comprobante */}
-                  <div className="text-center space-y-1 pb-3 border-b border-slate-100">
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 text-blue-900 border border-blue-200/80 text-[10.5px] font-bold tracking-tight">
-                      <Sparkles className="w-3 h-3 text-blue-600" />
-                      <span>
-                        {imageScope === 'planner'
-                          ? 'Planificación & Colecta'
-                          : imageScope === 'tricount'
-                          ? 'Liquidación Tripcount'
-                          : 'Reporte de Cuentas'}
-                      </span>
-                    </div>
-
-                    <h4 className="text-lg font-black text-slate-950 tracking-tight leading-snug pt-1">
+                  <div className="text-center space-y-1 pb-2.5 border-b border-slate-100">
+                    <h4 className="text-xl font-black text-slate-950 tracking-tight leading-snug">
                       {sheet.title}
                     </h4>
 
-                    <p className="text-[10.5px] text-slate-400 font-mono">
+                    {imageScope === 'planner' ? (
+                      <div className="inline-flex items-center gap-1 px-3 py-0.5 rounded-md bg-blue-50 border border-blue-200 text-blue-900 font-bold text-xs">
+                        <span>{activePlanner.name || 'General'}</span>
+                      </div>
+                    ) : imageScope === 'tricount' ? (
+                      <div className="inline-flex items-center gap-1 px-3 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-900 font-bold text-xs">
+                        <span>Tripcount</span>
+                      </div>
+                    ) : (
+                      <div className="inline-flex items-center gap-1 px-3 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 text-indigo-900 font-bold text-xs">
+                        <span>Reporte de Cuentas</span>
+                      </div>
+                    )}
+
+                    <p className="text-[10px] text-slate-400 font-mono">
                       {nowFormatted}
                     </p>
                   </div>
@@ -634,13 +968,50 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                           <span className="font-mono font-black text-white text-sm block mt-0.5">
                             {formatCurrency(prepaidData.totalTargetInBase, plannerCurrency, 2)}
                           </span>
+                          {selectedCurrencies.filter((c) => c !== plannerCurrency).length > 0 && (
+                            <div className="flex flex-wrap items-center justify-center gap-1 pt-1 border-t border-white/10 mt-1 text-[8.5px] font-mono text-blue-200">
+                              {selectedCurrencies
+                                .filter((c) => c !== plannerCurrency)
+                                .map((c) => (
+                                  <span key={c} className="bg-white/10 px-1 py-0.2 rounded">
+                                    {formatCurrency(
+                                      convertCurrency(prepaidData.totalTargetInBase, plannerCurrency, c, rates),
+                                      c,
+                                      2
+                                    )}
+                                  </span>
+                                ))}
+                            </div>
+                          )}
                         </div>
+
                         <div className="bg-blue-900 text-white p-2.5 rounded-xl border border-blue-800 text-center">
                           <span className="text-blue-200 block text-[9px] font-bold uppercase">Cuota p/p</span>
                           <span className="font-mono font-black text-blue-100 text-sm block mt-0.5">
                             {formatCurrency(prepaidData.totalTargetInBase / (members.length || 1), plannerCurrency, 2)}
                           </span>
+                          {selectedCurrencies.filter((c) => c !== plannerCurrency).length > 0 && (
+                            <div className="flex flex-wrap items-center justify-center gap-1 pt-1 border-t border-white/10 mt-1 text-[8.5px] font-mono text-blue-200">
+                              {selectedCurrencies
+                                .filter((c) => c !== plannerCurrency)
+                                .map((c) => (
+                                  <span key={c} className="bg-white/10 px-1 py-0.2 rounded">
+                                    {formatCurrency(
+                                      convertCurrency(
+                                        prepaidData.totalTargetInBase / (members.length || 1),
+                                        plannerCurrency,
+                                        c,
+                                        rates
+                                      ),
+                                      c,
+                                      2
+                                    )}
+                                  </span>
+                                ))}
+                            </div>
+                          )}
                         </div>
+
                         <div className="bg-emerald-50 p-2.5 rounded-xl border border-emerald-200 text-center">
                           <div className="flex items-center justify-center gap-1">
                             <span className="text-emerald-700 block text-[9px] font-bold uppercase">Abonado</span>
@@ -651,12 +1022,43 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                           <span className="font-mono font-black text-emerald-800 text-sm block mt-0.5">
                             {formatCurrency(prepaidData.totalCollectedInBase, plannerCurrency, 2)}
                           </span>
+                          {selectedCurrencies.filter((c) => c !== plannerCurrency).length > 0 && (
+                            <div className="flex flex-wrap items-center justify-center gap-1 pt-1 border-t border-emerald-200/60 mt-1 text-[8.5px] font-mono text-emerald-800">
+                              {selectedCurrencies
+                                .filter((c) => c !== plannerCurrency)
+                                .map((c) => (
+                                  <span key={c} className="bg-emerald-100 px-1 py-0.2 rounded">
+                                    {formatCurrency(
+                                      convertCurrency(prepaidData.totalCollectedInBase, plannerCurrency, c, rates),
+                                      c,
+                                      2
+                                    )}
+                                  </span>
+                                ))}
+                            </div>
+                          )}
                         </div>
+
                         <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200 text-center">
                           <span className="text-amber-700 block text-[9px] font-bold uppercase">Falta por Reunir</span>
                           <span className="font-mono font-black text-amber-800 text-sm block mt-0.5">
                             {formatCurrency(prepaidData.totalRemainingInBase, plannerCurrency, 2)}
                           </span>
+                          {selectedCurrencies.filter((c) => c !== plannerCurrency).length > 0 && (
+                            <div className="flex flex-wrap items-center justify-center gap-1 pt-1 border-t border-amber-200/60 mt-1 text-[8.5px] font-mono text-amber-800">
+                              {selectedCurrencies
+                                .filter((c) => c !== plannerCurrency)
+                                .map((c) => (
+                                  <span key={c} className="bg-amber-100 px-1 py-0.2 rounded">
+                                    {formatCurrency(
+                                      convertCurrency(prepaidData.totalRemainingInBase, plannerCurrency, c, rates),
+                                      c,
+                                      2
+                                    )}
+                                  </span>
+                                ))}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -670,14 +1072,19 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Desglose Elegante por Participante */}
+                      {/* Desglose Elegante por Participante (Primero los que deben, orden alfabético) */}
                       <div className="space-y-1.5 pt-1">
-                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                          Participantes y Cuotas ({prepaidData.membersStats.length})
-                        </span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                            Participantes y Cuotas{activePlanner.name && activePlanner.name !== 'General' ? `: ${activePlanner.name}` : ''} ({sortedPlannerMembers.length})
+                          </span>
+                          <span className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded-xs">
+                            Pendientes primero
+                          </span>
+                        </div>
 
                         <div className="space-y-1.5">
-                          {prepaidData.membersStats.map((m, idx) => (
+                          {sortedPlannerMembers.map((m, idx) => (
                             <div
                               key={idx}
                               className={`p-2.5 rounded-xl border transition-colors space-y-1 ${
@@ -724,25 +1131,20 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                                 <span className="font-bold text-blue-700">{m.percent}%</span>
                               </div>
 
-                              {/* Desglose Multimoneda de lo que le falta */}
-                              {!m.isCompleted && includeMulticurrencyRemaining && (
+                              {/* Desglose Multimoneda de lo que le falta en las monedas seleccionadas */}
+                              {!m.isCompleted && includeMulticurrencyRemaining && selectedCurrencies.length > 0 && (
                                 <div className="grid grid-cols-2 gap-1 mt-1.5 pt-1.5 border-t border-slate-200/80 text-[9px] font-mono bg-white/90 rounded-lg p-1.5 border border-slate-200 shadow-2xs">
-                                  <div className="flex items-center justify-between text-slate-600">
-                                    <span className="font-bold text-slate-500">USD:</span>
-                                    <span className="font-bold text-slate-900">${formatNumber(m.remainingInAllCurrencies.USD, 2)}</span>
-                                  </div>
-                                  <div className="flex items-center justify-between text-slate-600">
-                                    <span className="font-bold text-slate-500">VES:</span>
-                                    <span className="font-bold text-emerald-700">Bs {formatNumber(m.remainingInAllCurrencies.VES, 2)}</span>
-                                  </div>
-                                  <div className="flex items-center justify-between text-slate-600">
-                                    <span className="font-bold text-slate-500">USDT:</span>
-                                    <span className="font-bold text-amber-700">{formatNumber(m.remainingInAllCurrencies.USDT, 2)}</span>
-                                  </div>
-                                  <div className="flex items-center justify-between text-slate-600">
-                                    <span className="font-bold text-slate-500">EUR:</span>
-                                    <span className="font-bold text-teal-700">€{formatNumber(m.remainingInAllCurrencies.EUR, 2)}</span>
-                                  </div>
+                                  {selectedCurrencies.map((cur) => {
+                                    const convAmt = convertCurrency(m.remainingInBase, plannerCurrency, cur, rates);
+                                    return (
+                                      <div key={cur} className="flex items-center justify-between text-slate-600 px-1 py-0.5 rounded bg-slate-50 border border-slate-100">
+                                        <span className="font-bold text-slate-500">{cur}:</span>
+                                        <span className="font-bold text-slate-900">
+                                          {formatCurrency(convAmt, cur, 2)}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
@@ -782,160 +1184,316 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                     </div>
                   )}
 
-                  {/* 4. SECCIÓN TABLA COMPLETA (Filas y Totales Multidivisa) */}
+                  {/* 4. SECCIÓN REPORTE CONSOLIDADO COMPLETO (Planners + Tripcount + Tabla) */}
                   {imageScope === 'both' && (
-                    <div className="space-y-3">
-                      {/* Encabezado de la tabla */}
-                      <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                          Desglose de Gastos ({computedRows.length} {computedRows.length === 1 ? 'ítem' : 'ítems'})
-                        </span>
-                        <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-                          <table className="w-full border-collapse text-left text-xs">
-                            <thead>
-                              <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-tight">
-                                <th className="py-1.5 px-2 w-6 text-center">#</th>
-                                <th className="py-1.5 px-2">Descripción</th>
-                                <th className="py-1.5 px-2 text-right">Monto</th>
-                                <th className="py-1.5 px-2 text-right">Equiv. $</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 bg-white">
-                              {computedRows.map((row, i) => (
-                                <tr key={row.id || i} className={i % 2 === 1 ? 'bg-slate-50/50' : ''}>
-                                  <td className="py-2 px-2 font-mono font-bold text-slate-400 text-center text-[10px]">
-                                    {i + 1}
-                                  </td>
-                                  <td className="py-2 px-2 text-[11px] text-slate-800 font-medium max-w-[140px] break-words">
-                                    {row.concept.trim() || <span className="text-slate-300">—</span>}
-                                    {row.payer && isTricountActive && (
-                                      <span className="text-[9px] text-indigo-600 block font-semibold">
-                                        (Pagó: {row.payer})
-                                      </span>
-                                    )}
-                                  </td>
-                                  <td className="py-2 px-2 font-mono font-bold text-slate-900 text-right whitespace-nowrap text-[11px]">
-                                    {formatCurrency(row.evaluatedValue, row.currency, settings.decimals)}
-                                  </td>
-                                  <td className="py-2 px-2 font-mono font-bold text-indigo-700 text-right whitespace-nowrap text-[11px]">
-                                    ${formatNumber(row.equivalents.USD, 2)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-
-                      {/* Tarjeta de Totales Multimoneda */}
-                      <div className="bg-gradient-to-br from-indigo-900 to-slate-900 text-white rounded-xl p-3.5 shadow-xs space-y-2">
+                    <div className="space-y-3.5">
+                      {/* Banner de Gasto Total Consolidado de la Cuenta */}
+                      <div className="p-3 rounded-xl bg-gradient-to-br from-indigo-900 via-blue-950 to-slate-900 text-white shadow-xs space-y-2">
                         <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-200">
-                            Total General a Pagar
+                            Gasto Total de la Cuenta (Planners + Tripcount)
                           </span>
-                          <span className="font-mono text-[10px] text-indigo-300 font-semibold">
-                            4 Monedas
+                          <span className="font-mono text-[9.5px] text-emerald-300 font-bold bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/30">
+                            Consolidado
                           </span>
                         </div>
 
-                        {/* Principal: Bolívares */}
+                        {/* Principal Consolidado */}
                         <div className="flex items-baseline justify-between pt-0.5">
-                          <span className="text-xs font-bold text-indigo-100">Total Bs:</span>
+                          <span className="text-xs font-bold text-indigo-100">Total Consolidado:</span>
                           <span className="text-lg font-black font-mono tracking-tight text-white">
-                            Bs. {formatNumber(totals.netByCurrency.VES, 2)}
+                            {formatCurrency(consolidatedAccountTotals.grandTotal, settleCurrency, 2)}
                           </span>
                         </div>
 
-                        {/* Secundarios: $, USDT, EUR */}
-                        <div className="grid grid-cols-3 gap-1 pt-1.5 border-t border-white/10 font-mono text-[10.5px]">
-                          <div className="bg-white/10 rounded-lg p-1.5 text-center">
-                            <span className="text-[9px] text-indigo-200 block uppercase">Dólares</span>
-                            <span className="font-bold text-white">${formatNumber(totals.netByCurrency.USD, 2)}</span>
+                        {/* Subtotales: Planners vs Tripcount */}
+                        <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-white/10 font-mono text-[10.5px]">
+                          <div className="bg-white/10 rounded-lg p-2 text-center">
+                            <span className="text-[8.5px] text-blue-200 block uppercase font-bold">Total Planners ({sheetPlanners.length})</span>
+                            <span className="font-black text-white text-xs block mt-0.5">
+                              {formatCurrency(consolidatedAccountTotals.plannersTargetTotal, settleCurrency, 2)}
+                            </span>
+                            <span className="text-[8px] text-emerald-300 block">
+                              ({formatCurrency(consolidatedAccountTotals.plannersCollectedTotal, settleCurrency, 2)} abonado)
+                            </span>
                           </div>
-                          <div className="bg-white/10 rounded-lg p-1.5 text-center">
-                            <span className="text-[9px] text-indigo-200 block uppercase">USDT</span>
-                            <span className="font-bold text-white">{formatNumber(totals.netByCurrency.USDT, 2)}</span>
-                          </div>
-                          <div className="bg-white/10 rounded-lg p-1.5 text-center">
-                            <span className="text-[9px] text-indigo-200 block uppercase">Euros</span>
-                            <span className="font-bold text-white">€{formatNumber(totals.netByCurrency.EUR, 2)}</span>
+
+                          <div className="bg-white/10 rounded-lg p-2 text-center">
+                            <span className="text-[8.5px] text-emerald-200 block uppercase font-bold">Total Tripcount</span>
+                            <span className="font-black text-white text-xs block mt-0.5">
+                              {formatCurrency(consolidatedAccountTotals.tripcountTotal, settleCurrency, 2)}
+                            </span>
+                            <span className="text-[8px] text-emerald-300 block">
+                              ({members.length} participantes)
+                            </span>
                           </div>
                         </div>
                       </div>
+
+                      {/* Desglose de Todos los Planners */}
+                      {includePlanners && sheetPlanners.length > 0 && (
+                        <div className="space-y-2 pt-1 border-t border-slate-100">
+                          <span className="text-[10.5px] font-bold text-slate-800 uppercase tracking-wider block">
+                            Planners y Colectas ({sheetPlanners.length})
+                          </span>
+
+                          <div className="space-y-2">
+                            {sheetPlanners.map((p) => {
+                              const pCurr = p.targetCurrency || settings.displayCurrency;
+                              const pStats = calculatePrepaidTripStats(members, p, rates, pCurr);
+
+                              return (
+                                <div key={p.id} className="p-2.5 rounded-xl border border-blue-200/80 bg-blue-50/40 space-y-2 text-xs">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="p-1 rounded-md bg-blue-600 text-white">
+                                        <Plane className="w-3 h-3" />
+                                      </span>
+                                      <strong className="font-bold text-slate-900 text-xs">
+                                        Planner: {p.name || 'General'}
+                                      </strong>
+                                    </div>
+                                    <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${pStats.isGoalReached ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                                      {pStats.progressPercent.toFixed(1)}% ({formatCurrency(pStats.totalCollectedInBase, pCurr, 2)})
+                                    </span>
+                                  </div>
+
+                                  <div className="grid grid-cols-3 gap-1 font-mono text-[9.5px] text-center bg-white p-1 rounded-lg border border-slate-200/80">
+                                    <div>
+                                      <span className="text-[7.5px] text-slate-400 block uppercase">Meta</span>
+                                      <strong>{formatCurrency(pStats.totalTargetInBase, pCurr, 2)}</strong>
+                                    </div>
+                                    <div>
+                                      <span className="text-[7.5px] text-slate-400 block uppercase">Cuota p/p</span>
+                                      <strong>{formatCurrency(pStats.totalTargetInBase / (members.length || 1), pCurr, 2)}</strong>
+                                    </div>
+                                    <div>
+                                      <span className="text-[7.5px] text-slate-400 block uppercase">Falta</span>
+                                      <strong className={pStats.isGoalReached ? 'text-emerald-700' : 'text-amber-800'}>
+                                        {pStats.isGoalReached ? '¡Listo!' : formatCurrency(pStats.totalRemainingInBase, pCurr, 2)}
+                                      </strong>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Desglose de la Tabla de Gastos */}
+                      {includeFullTable && computedRows.length > 0 && (
+                        <div className="space-y-1.5 pt-1 border-t border-slate-100">
+                          <span className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">
+                            Tabla de Gastos ({computedRows.length} ítems)
+                          </span>
+                          <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                            <table className="w-full border-collapse text-left text-xs">
+                              <thead>
+                                <tr className="bg-slate-50 border-b border-slate-200 text-[9.5px] font-bold text-slate-500 uppercase">
+                                  <th className="py-1 px-2 w-6 text-center">#</th>
+                                  <th className="py-1 px-2">Descripción</th>
+                                  <th className="py-1 px-2 text-right">Monto</th>
+                                  <th className="py-1 px-2 text-right">Equiv. {settleCurrency}</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 bg-white text-[10.5px]">
+                                {computedRows.map((row, i) => (
+                                  <tr key={row.id || i} className={i % 2 === 1 ? 'bg-slate-50/50' : ''}>
+                                    <td className="py-1.5 px-2 font-mono font-bold text-slate-400 text-center text-[9px]">
+                                      {i + 1}
+                                    </td>
+                                    <td className="py-1.5 px-2 text-slate-800 font-medium max-w-[140px] break-words">
+                                      {row.concept.trim() || <span className="text-slate-300">—</span>}
+                                      {row.payer && (
+                                        <span className="text-[8.5px] text-indigo-600 block font-semibold">
+                                          (Pagó: {row.payer})
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="py-1.5 px-2 font-mono font-bold text-slate-900 text-right whitespace-nowrap">
+                                      {formatCurrency(row.evaluatedValue, row.currency, settings.decimals)}
+                                    </td>
+                                    <td className="py-1.5 px-2 font-mono font-bold text-indigo-700 text-right whitespace-nowrap">
+                                      {formatCurrency(row.equivalents[settleCurrency], settleCurrency, settings.decimals)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
                   {/* 5. SECCIÓN TRIPCOUNT POSTPAGO (Gastos Compartidos & Liquidación) */}
-                  {(imageScope === 'tricount' || imageScope === 'both') && tricountData && (
+                  {(imageScope === 'tricount' || imageScope === 'both') && postpaidStats && (
                     <div className="space-y-3 pt-2 border-t border-slate-100">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 text-slate-900 font-black text-xs uppercase tracking-tight">
-                          <span className="p-1 rounded bg-emerald-600 text-white">
-                            <Users className="w-3 h-3" />
-                          </span>
-                          <span>Liquidación Tripcount</span>
+                      {/* Summary Banner - 3 Tarjetas en 1 Sola Línea */}
+                      <div className="p-2 sm:p-2.5 rounded-xl bg-gradient-to-br from-emerald-50/80 via-white to-teal-50/50 border border-emerald-200 shadow-2xs space-y-1.5">
+                        <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center">
+                          <div className="p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                            <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase block">Gasto Total</span>
+                            <span className="text-xs sm:text-sm font-extrabold font-mono text-slate-900 block truncate mt-0.5">
+                              {formatCurrency(postpaidStats.totalSharedExpense, settleCurrency, settings.decimals)}
+                            </span>
+                          </div>
+
+                          <div className="p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                            <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase block">Cuota p/p</span>
+                            <span className="text-xs sm:text-sm font-extrabold font-mono text-emerald-800 block truncate mt-0.5">
+                              {formatCurrency(postpaidStats.fairShare, settleCurrency, settings.decimals)}
+                            </span>
+                          </div>
+
+                          <div className="p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                            <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase block">Participantes</span>
+                            <span className="text-xs sm:text-sm font-extrabold font-mono text-slate-900 block truncate mt-0.5">
+                              {members.length} {members.length === 1 ? 'persona' : 'personas'}
+                            </span>
+                          </div>
                         </div>
-                        <span className="text-[10px] font-bold font-mono text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
-                          {members.length} personas
-                        </span>
+
+                        {/* Indicación de Moneda Base de Conversión */}
+                        <div className="text-[9px] font-mono text-slate-400 text-center flex items-center justify-center gap-1">
+                          <span>Base de liquidación:</span>
+                          <strong className="text-slate-600 font-bold">{settleCurrency} ({CURRENCY_CONFIG[settleCurrency].name})</strong>
+                          <span>• Conversión a tasas oficiales del comprobante</span>
+                        </div>
                       </div>
 
-                      {/* Métricas de cuota justa */}
-                      <div className="grid grid-cols-2 gap-2 text-[11px]">
-                        <div className="bg-slate-50 p-2 rounded-xl border border-slate-200 text-center">
-                          <span className="text-slate-400 block text-[9px] font-bold uppercase">Cuota Justa / Persona</span>
-                          <span className="font-mono font-black text-slate-900 text-xs sm:text-sm block mt-0.5">
-                            {formatCurrency(tricountData.fairShare, settleCurrency, settings.decimals)}
-                          </span>
-                        </div>
-                        <div className="bg-slate-50 p-2 rounded-xl border border-slate-200 text-center">
-                          <span className="text-slate-400 block text-[9px] font-bold uppercase">Gasto Total Compartido</span>
-                          <span className="font-mono font-black text-slate-900 text-xs sm:text-sm block mt-0.5">
-                            {formatCurrency(tricountData.totalShared, settleCurrency, settings.decimals)}
-                          </span>
-                        </div>
-                      </div>
+                      {/* 1. ¿Quién pagó cada fila? (Detalle con moneda original y convertido) */}
+                      {includeTripcountRows && computedRows.length > 0 && (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">
+                              1. ¿Quién pagó cada fila? ({computedRows.length})
+                            </span>
+                          </div>
+                          <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white overflow-hidden shadow-2xs">
+                            {computedRows.map((row, idx) => {
+                              const currentPayer = row.payer && members.includes(row.payer) ? row.payer : members[0];
+                              const isCustomSplit =
+                                row.participants &&
+                                row.participants.length > 0 &&
+                                row.participants.length < members.length;
+                              const isDifferentCurrency = row.currency !== settleCurrency;
 
-                      {/* Resumen de quién pagó qué */}
-                      <div className="space-y-1.5 pt-1">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                          Aportes de Gastos por Persona
-                        </span>
-                        <div className="space-y-1">
-                          {members.map((name) => {
-                            const paid = tricountData.paidByPerson[name] || 0;
-                            const bal = tricountData.balances[name] || 0;
-                            return (
-                              <div
-                                key={name}
-                                className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs flex items-center justify-between"
-                              >
-                                <span className="font-bold text-slate-800">{name}</span>
-                                <div className="text-right font-mono text-[11px]">
-                                  <span className="text-slate-500 mr-2">Pagó: {formatCurrency(paid, settleCurrency, 2)}</span>
-                                  {bal > 0.009 ? (
-                                    <span className="text-emerald-700 font-bold">Le deben +{formatCurrency(bal, settleCurrency, 2)}</span>
-                                  ) : bal < -0.009 ? (
-                                    <span className="text-rose-700 font-bold">Debe -{formatCurrency(-bal, settleCurrency, 2)}</span>
-                                  ) : (
-                                    <span className="text-slate-500 font-bold">Al día</span>
-                                  )}
+                              return (
+                                <div key={row.id || idx} className="p-2 flex items-center justify-between gap-2 text-xs">
+                                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                    <span className="font-mono text-slate-400 text-[10px] font-bold shrink-0">
+                                      #{idx + 1}
+                                    </span>
+                                    <div className="min-w-0">
+                                      <span className="font-medium text-slate-800 truncate block">
+                                        {row.concept || '(Sin descripción)'}
+                                      </span>
+                                      {isCustomSplit && (
+                                        <span className="text-[8.5px] font-bold text-amber-700 block">
+                                          ({row.participants!.length} de {members.length} pers.)
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0 font-mono text-[11px] text-right">
+                                    <div>
+                                      <span className="text-slate-900 font-bold block">
+                                        {formatCurrency(row.equivalents[settleCurrency], settleCurrency, settings.decimals)}
+                                      </span>
+                                      {isDifferentCurrency && (
+                                        <span className="text-[9px] text-slate-400 block font-normal">
+                                          (Orig: {formatCurrency(row.evaluatedValue, row.currency, 2)})
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 text-[9.5px]">
+                                      Pagó: {currentPayer}
+                                    </span>
+                                  </div>
                                 </div>
-                              </div>
-                            );
-                          })}
+                              );
+                            })}
+                          </div>
                         </div>
-                      </div>
+                      )}
 
-                      {/* Transferencias */}
-                      {tricountData.transfers.length > 0 && (
-                        <div className="space-y-1.5 pt-1">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                            Transferencias para Saldar Cuentas
+                      {/* Desglose de Gastos por Persona (Quién está contado en qué gasto) */}
+                      {includeTripcountParticipantsBreakdown && (
+                        <div className="space-y-1.5 pt-1 border-t border-slate-100">
+                          <span className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">
+                            Detalle de Gastos por Participante
                           </span>
-
                           <div className="space-y-1.5">
-                            {tricountData.transfers.map((t, idx) => {
+                            {members.map((m) => {
+                              const includedRows = computedRows.filter((r) => {
+                                if (!r.isValid) return false;
+                                return !r.participants || r.participants.length === 0 || r.participants.includes(m);
+                              });
+                              const consumed = postpaidStats.consumedByPerson[m] || 0;
+                              const paid = postpaidStats.paidByPerson[m] || 0;
+
+                              return (
+                                <div key={m} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-xs">
+                                  <div className="flex items-center justify-between border-b border-slate-200/80 pb-1">
+                                    <div className="flex items-center gap-1.5">
+                                      <div className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 font-black text-[9px] flex items-center justify-center">
+                                        {m.charAt(0).toUpperCase()}
+                                      </div>
+                                      <span className="font-bold text-slate-900 text-xs">{m}</span>
+                                      <span className="text-[9.5px] text-slate-400 font-mono">
+                                        ({includedRows.length} {includedRows.length === 1 ? 'gasto' : 'gastos'})
+                                      </span>
+                                    </div>
+                                    <div className="text-right font-mono text-[10px]">
+                                      <span className="text-slate-500">Consumo: </span>
+                                      <strong className="text-slate-900 font-bold">{formatCurrency(consumed, settleCurrency, 2)}</strong>
+                                    </div>
+                                  </div>
+
+                                  {/* Rows list for this participant */}
+                                  <div className="space-y-0.5">
+                                    {includedRows.map((r, rIdx) => {
+                                      const rowParts = r.participants && r.participants.length > 0 ? r.participants : members;
+                                      const share = Math.abs(r.equivalents[settleCurrency]) / (rowParts.length || 1);
+                                      return (
+                                        <div key={r.id || rIdx} className="flex items-center justify-between text-[10px] text-slate-600 pl-1 font-mono">
+                                          <span className="truncate max-w-[200px] text-slate-700">
+                                            • {r.concept || '(Gasto)'} <span className="text-slate-400">(Pagó: {r.payer || members[0]})</span>
+                                          </span>
+                                          <span className="font-semibold text-slate-900">
+                                            {formatCurrency(share, settleCurrency, 2)}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 2. Liquidación • ¿Quién le debe a quién? (Tarjetas Anchas y Compactas con Monedas Seleccionadas) */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-slate-800 uppercase tracking-wider block">
+                            2. Liquidación • ¿Quién le debe a quién?
+                          </span>
+                          <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded">
+                            {postpaidStats.transfers.length} {postpaidStats.transfers.length === 1 ? 'transferencia' : 'transferencias'}
+                          </span>
+                        </div>
+
+                        {postpaidStats.transfers.length === 0 ? (
+                          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-center text-emerald-800 text-xs font-bold">
+                            🎉 ¡Cuentas al día! Nadie se debe nada.
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {sortedTripcountTransfers.map((t, idx) => {
                               const transferKey = `${t.from}->${t.to}`;
                               const isSettled = Boolean(
                                 sheet.settledTransfers?.[transferKey] ||
@@ -945,45 +1503,113 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                               return (
                                 <div
                                   key={idx}
-                                  className={`p-2.5 rounded-xl border space-y-1.5 transition-colors ${
+                                  className={`p-2 sm:p-2.5 rounded-xl border space-y-1.5 transition-colors ${
                                     isSettled
                                       ? 'bg-emerald-50/40 border-emerald-300'
-                                      : 'bg-slate-50 border-slate-200'
+                                      : 'bg-white border-slate-200 shadow-2xs'
                                   }`}
                                 >
-                                  <div className="flex items-center justify-between font-bold">
+                                  {/* Encabezado Compacto de la Transferencia */}
+                                  <div className="flex items-center justify-between font-bold flex-wrap gap-1">
                                     <div className="flex items-center gap-1.5 min-w-0 text-xs">
-                                      <span className={isSettled ? 'text-slate-400 line-through' : 'text-rose-700 font-bold'}>
+                                      <span
+                                        className={`px-2 py-0.5 rounded-md border text-xs font-bold ${
+                                          isSettled
+                                            ? 'bg-slate-100 text-slate-400 line-through border-slate-200'
+                                            : 'bg-rose-50 text-rose-700 border-rose-200'
+                                        }`}
+                                      >
                                         {t.from}
                                       </span>
-                                      <span className="text-slate-400 text-[10px] font-normal">➔</span>
-                                      <span className="text-emerald-800 font-bold">{t.to}</span>
+                                      <span className="text-slate-400 text-[10.5px] font-normal">le debe pagar a</span>
+                                      <span className="px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-800 border-emerald-200 text-xs font-bold">
+                                        {t.to}
+                                      </span>
                                     </div>
 
                                     {isSettled ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[9px] font-black uppercase tracking-wider shadow-2xs">
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[8.5px] font-black uppercase tracking-wider shadow-2xs">
                                         <CheckCircle2 className="w-2.5 h-2.5" />
                                         Listo / Ya pagó
                                       </span>
                                     ) : (
-                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[9px] font-bold">
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[8.5px] font-bold">
                                         Pendiente
                                       </span>
                                     )}
                                   </div>
 
-                                  <div className="bg-white p-1.5 rounded-lg border border-slate-200/80 font-mono text-[10px] flex items-center justify-between px-2 font-bold">
-                                    <span className="text-slate-900">${formatNumber(t.inUSD, 2)}</span>
-                                    <span className="text-slate-300">•</span>
-                                    <span className="text-emerald-700">Bs. {formatNumber(t.inVES, 2)}</span>
-                                    <span className="text-slate-300">•</span>
-                                    <span className="text-amber-700">{formatNumber(t.inUSDT, 2)} USDT</span>
-                                    <span className="text-slate-300">•</span>
-                                    <span className="text-teal-700">€{formatNumber(t.inEUR, 2)}</span>
+                                  {/* Cajas de Monedas en 1 Sola Línea Horizontal Dinámica (Compactas y Anchas) */}
+                                  <div className="flex items-center gap-1 font-mono text-[9.5px] overflow-x-auto scrollbar-none">
+                                    {selectedCurrencies.map((cur) => {
+                                      const amt = t.amountsInAllCurrencies?.[cur] ?? convertCurrency(t.amount, settleCurrency, cur, rates);
+                                      const isUsd = cur === 'USD';
+                                      const isVes = cur === 'VES';
+                                      const isUsdt = cur === 'USDT';
+                                      const isEur = cur === 'EUR';
+
+                                      const bgClass = isUsd
+                                        ? 'bg-blue-50/80 border-blue-200 text-blue-950'
+                                        : isVes
+                                        ? 'bg-slate-50 border-slate-200 text-slate-900'
+                                        : isUsdt
+                                        ? 'bg-amber-50/80 border-amber-200 text-amber-950'
+                                        : 'bg-emerald-50/80 border-emerald-200 text-emerald-950';
+
+                                      return (
+                                        <div
+                                          key={cur}
+                                          className={`flex-1 min-w-[70px] p-1 rounded-lg border text-center ${bgClass}`}
+                                        >
+                                          <span className="text-[7.5px] font-bold uppercase block opacity-70">
+                                            {cur}
+                                          </span>
+                                          <span className="font-black text-[10.5px] block truncate">
+                                            {formatCurrency(amt, cur, 2)}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 </div>
                               );
                             })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 3. Historial de Abonos y Liquidaciones de Tripcount (Opcional en la imagen) */}
+                      {includeTripcountHistory && (
+                        <div className="space-y-1.5 pt-1 border-t border-slate-100">
+                          <span className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">
+                            3. Historial de Abonos y Liquidaciones de Tripcount
+                          </span>
+                          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-600 space-y-1">
+                            {Object.keys(sheet.settledTransfers || {}).length === 0 &&
+                            Object.keys(sheet.settledDebtors || {}).length === 0 &&
+                            Object.keys(sheet.partialSettlements || {}).length === 0 ? (
+                              <p className="text-slate-400 italic">No hay liquidaciones o abonos registrados aún.</p>
+                            ) : (
+                              <div className="space-y-1">
+                                {Object.entries(sheet.settledTransfers || {}).map(([key, val]) =>
+                                  val ? (
+                                    <div key={key} className="flex items-center justify-between font-mono">
+                                      <span>Liquidación: {key.replace('->', ' ➔ ')}</span>
+                                      <span className="text-emerald-700 font-bold">Completada</span>
+                                    </div>
+                                  ) : null
+                                )}
+                                {Object.entries(sheet.partialSettlements || {}).map(([key, rawAmt]) => {
+                                  const amt = Number(rawAmt) || 0;
+                                  return amt > 0 ? (
+                                    <div key={key} className="flex items-center justify-between font-mono">
+                                      <span>Abono parcial: {key.replace('->', ' ➔ ')}</span>
+                                      <span className="text-blue-700 font-bold">{formatCurrency(amt, settleCurrency, 2)}</span>
+                                    </div>
+                                  ) : null;
+                                })}
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}
@@ -998,61 +1624,86 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({
                 </div>
               </div>
 
-              {/* Action Buttons for Image / Report */}
-              <div className="w-full grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+              {/* Action Buttons for Image / Report / PDF / HTML */}
+              <div className="w-full grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5 pt-1">
+                {/* 1. Copiar Imagen */}
                 <button
                   type="button"
                   onClick={handleCopyImage}
                   disabled={isGenerating}
-                  className="flex items-center justify-center gap-1.5 py-2.5 px-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
-                  title="Copiar imagen directamente al portapapeles"
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                  title="Copiar imagen HD directamente al portapapeles"
                 >
                   {isGenerating ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   ) : copiedImage ? (
-                    <Check className="w-4 h-4 text-emerald-300" />
+                    <Check className="w-3.5 h-3.5 text-emerald-300" />
                   ) : (
-                    <Copy className="w-4 h-4" />
+                    <Copy className="w-3.5 h-3.5" />
                   )}
-                  <span>{copiedImage ? '¡Copiada!' : 'Copiar Imagen'}</span>
+                  <span className="truncate">{copiedImage ? '¡Copiada!' : 'Copiar Imagen'}</span>
                 </button>
 
+                {/* 2. Compartir (WhatsApp / Apps) */}
                 <button
                   type="button"
                   onClick={handleShareImage}
                   disabled={isGenerating}
-                  className="flex items-center justify-center gap-1.5 py-2.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
                   title="Compartir imagen por WhatsApp u otras apps"
                 >
-                  <Share2 className="w-4 h-4" />
-                  <span>Compartir</span>
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span className="truncate">Compartir</span>
                 </button>
 
-                {imageScope === 'planner' && (
-                  <button
-                    type="button"
-                    onClick={handleCopyWhatsAppText}
-                    className="flex items-center justify-center gap-1.5 py-2.5 px-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95"
-                    title="Copiar texto listo para pegar en WhatsApp"
-                  >
-                    {copiedWhatsAppText ? (
-                      <Check className="w-4 h-4 text-emerald-300" />
-                    ) : (
-                      <MessageSquare className="w-4 h-4" />
-                    )}
-                    <span>{copiedWhatsAppText ? '¡Copiado!' : 'Texto WhatsApp'}</span>
-                  </button>
-                )}
-
+                {/* 3. Descargar PNG HD */}
                 <button
                   type="button"
                   onClick={handleDownloadImage}
                   disabled={isGenerating}
-                  className={`${imageScope === 'planner' ? 'col-span-1' : 'col-span-2 sm:col-span-1'} flex items-center justify-center gap-1.5 py-2.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer border border-slate-200 active:scale-95 disabled:opacity-50`}
-                  title="Descargar imagen PNG"
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer border border-slate-200 active:scale-95 disabled:opacity-50"
+                  title="Descargar imagen PNG en alta definición"
                 >
-                  <Download className="w-4 h-4" />
-                  <span>Descargar PNG</span>
+                  <Download className="w-3.5 h-3.5 text-slate-600" />
+                  <span className="truncate">PNG (HD)</span>
+                </button>
+
+                {/* 4. Exportar Documento PDF */}
+                <button
+                  type="button"
+                  onClick={handleDownloadPdf}
+                  disabled={isGenerating}
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                  title="Exportar a documento PDF multipágina o tamaño carta"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span className="truncate">Exportar PDF</span>
+                </button>
+
+                {/* 5. Reporte HTML Interactivo / Imprimible */}
+                <button
+                  type="button"
+                  onClick={handleDownloadHtml}
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95"
+                  title="Descargar reporte interactivo en formato HTML"
+                >
+                  <FileCode className="w-3.5 h-3.5" />
+                  <span className="truncate">Reporte HTML</span>
+                </button>
+
+                {/* 6. Texto para WhatsApp */}
+                <button
+                  type="button"
+                  onClick={handleCopyWhatsAppText}
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95"
+                  title="Copiar texto resumen formateado para WhatsApp"
+                >
+                  {copiedWhatsAppText ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-300" />
+                  ) : (
+                    <MessageSquare className="w-3.5 h-3.5" />
+                  )}
+                  <span className="truncate">{copiedWhatsAppText ? '¡Copiado!' : 'WhatsApp'}</span>
                 </button>
               </div>
 

@@ -50,6 +50,8 @@ import {
   calculatePrepaidTripStats,
   createDefaultPrepaidConfig,
   resolveMemberForContribution,
+  getSheetPlanners,
+  getActivePlanner,
 } from '../utils/tricountPrepaid';
 import {
   ALL_CURRENCIES,
@@ -90,6 +92,10 @@ interface SpreadsheetTableProps {
   onToggleSheetTricount?: (isActive: boolean) => void;
   onUpdateSheetTricountMode?: (mode: TricountMode) => void;
   onUpdatePrepaidConfig?: (config: TricountPrepaidConfig) => void;
+  onCreatePlanner?: (name: string, targetAmount?: number, currency?: Currency) => void;
+  onSelectPlanner?: (plannerId: string) => void;
+  onRenamePlanner?: (plannerId: string, newName: string) => void;
+  onDeletePlanner?: (plannerId: string) => void;
   onUpdateSettledTransfers?: (settledTransfers: Record<string, boolean>) => void;
   onUpdateSettledDebtors?: (settledDebtors: Record<string, boolean>) => void;
   onUpdatePartialSettlements?: (partialSettlements: Record<string, number>) => void;
@@ -127,6 +133,10 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   onToggleSheetTricount,
   onUpdateSheetTricountMode,
   onUpdatePrepaidConfig,
+  onCreatePlanner,
+  onSelectPlanner,
+  onRenamePlanner,
+  onDeletePlanner,
   onUpdateSettledTransfers,
   onUpdateSettledDebtors,
   onUpdatePartialSettlements,
@@ -261,6 +271,10 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   const [quickPayerName, setQuickPayerName] = useState('');
   const [copiedTricount, setCopiedTricount] = useState(false);
 
+  // Row Payer & Custom Participants Modal States (Exentar miembros)
+  const [selectedRowPayer, setSelectedRowPayer] = useState<string>('');
+  const [selectedRowParticipants, setSelectedRowParticipants] = useState<string[]>([]);
+
   // Planificador de Viaje / Prepaid Stats
   const isPrepaidMode = sheet.tricountMode === 'prepaid';
   const members = useMemo(
@@ -268,14 +282,16 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
     [sheet.members]
   );
 
-  const plannerCurrency: Currency = sheet.prepaidConfig?.targetCurrency || settings.displayCurrency;
+  const sheetPlanners = useMemo(() => getSheetPlanners(sheet), [sheet]);
+  const activePlanner = useMemo(() => getActivePlanner(sheet), [sheet]);
+  const plannerCurrency: Currency = activePlanner.targetCurrency || settings.displayCurrency;
 
   const prepaidStats = useMemo(() => {
-    if (!sheet.prepaidConfig?.targetAmount && !isPrepaidMode && sheet.tricountMode !== 'prepaid') {
+    if (!activePlanner.targetAmount && !isPrepaidMode && sheet.tricountMode !== 'prepaid') {
       return null;
     }
-    return calculatePrepaidTripStats(members, sheet.prepaidConfig, rates, plannerCurrency);
-  }, [sheet.prepaidConfig, isPrepaidMode, sheet.tricountMode, members, rates, plannerCurrency]);
+    return calculatePrepaidTripStats(members, activePlanner, rates, plannerCurrency);
+  }, [activePlanner, isPrepaidMode, sheet.tricountMode, members, rates, plannerCurrency]);
 
   // Quick Abono & Member Detail States & Target Edit States
   const [selectedMemberDetail, setSelectedMemberDetail] = useState<string | null>(null);
@@ -286,6 +302,25 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   const [contribToDelete, setContribToDelete] = useState<TricountContribution | null>(null);
   const [plannerSearchQuery, setPlannerSearchQuery] = useState('');
   const [plannerFilterStatus, setPlannerFilterStatus] = useState<'all' | 'pending' | 'completed'>('all');
+  
+  // Sort states: orden alfabético, por abono o por deuda en orden asc o desc
+  type PlannerSortField = 'name' | 'collected' | 'remaining';
+  type PlannerSortOrder = 'asc' | 'desc';
+  const [plannerSortField, setPlannerSortField] = useState<PlannerSortField>('remaining');
+  const [plannerSortOrder, setPlannerSortOrder] = useState<PlannerSortOrder>('desc');
+  const [isSortModalOpen, setIsSortModalOpen] = useState(false);
+
+  // Multiple Planners Modals
+  const [isCreatingPlanner, setIsCreatingPlanner] = useState(false);
+  const [newPlannerName, setNewPlannerName] = useState('');
+  const [newPlannerTarget, setNewPlannerTarget] = useState('');
+  const [newPlannerCurrency, setNewPlannerCurrency] = useState<Currency>(settings.displayCurrency);
+
+  const [renamingPlannerId, setRenamingPlannerId] = useState<string | null>(null);
+  const [renamingPlannerName, setRenamingPlannerName] = useState('');
+
+  const [deletingPlannerId, setDeletingPlannerId] = useState<string | null>(null);
+
   const [isQuickAbonoOpen, setIsQuickAbonoOpen] = useState(false);
   const [quickAbonoMember, setQuickAbonoMember] = useState('');
   const [quickAbonoAmount, setQuickAbonoAmount] = useState('');
@@ -293,6 +328,19 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   const [quickAbonoNote, setQuickAbonoNote] = useState('');
   const [quickAbonoDate, setQuickAbonoDate] = useState<string>('');
   const [quickAbonoError, setQuickAbonoError] = useState<string | null>(null);
+
+  const handleOpenRowPayerModal = (rowId: string) => {
+    const row = computedRows.find((r) => r.id === rowId);
+    if (!row) return;
+    const initialPayer = row.payer && members.includes(row.payer) ? row.payer : members[0] || 'Yo';
+    setSelectedRowPayer(initialPayer);
+    const existingParts =
+      row.participants && row.participants.length > 0
+        ? row.participants.filter((p) => members.includes(p))
+        : members;
+    setSelectedRowParticipants(existingParts.length > 0 ? existingParts : members);
+    setSelectingPayerRowId(rowId);
+  };
 
   const formatContributionDate = (timestamp: number) => {
     if (!timestamp) return 'Fecha no registrada';
@@ -337,12 +385,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
       note: quickAbonoNote.trim() || undefined,
     };
 
-    const currentConfig: TricountPrepaidConfig = sheet.prepaidConfig || {
-      targetAmount: 500,
-      targetCurrency: 'USD',
-      customQuotas: {},
-      contributions: [],
-    };
+    const currentConfig: TricountPrepaidConfig = activePlanner;
 
     const nextConfig: TricountPrepaidConfig = {
       ...currentConfig,
@@ -357,12 +400,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   };
 
   const handleUpdateContribution = (updated: TricountContribution) => {
-    const currentConfig: TricountPrepaidConfig = sheet.prepaidConfig || {
-      targetAmount: 500,
-      targetCurrency: 'USD',
-      customQuotas: {},
-      contributions: [],
-    };
+    const currentConfig: TricountPrepaidConfig = activePlanner;
 
     const nextContribs = (currentConfig.contributions || []).map((c) =>
       c.id === updated.id ? updated : c
@@ -380,12 +418,7 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
   };
 
   const handleDeleteContribution = (id: string) => {
-    const currentConfig: TricountPrepaidConfig = sheet.prepaidConfig || {
-      targetAmount: 500,
-      targetCurrency: 'USD',
-      customQuotas: {},
-      contributions: [],
-    };
+    const currentConfig: TricountPrepaidConfig = activePlanner;
 
     const nextContribs = (currentConfig.contributions || []).filter((c) => c.id !== id);
     const nextConfig: TricountPrepaidConfig = {
@@ -809,13 +842,99 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
       {/* CUERPO PRINCIPAL: O PLANNER DEDICADO (FONDO AZUL) O TABLA EXCEL DE CÁLCULO */}
       {isPrepaidMode && prepaidStats ? (
         <div className="w-full flex-1 min-h-0 overflow-y-auto bg-slate-100/90 p-2 sm:p-2.5 space-y-2">
+          {/* BARRA DE PLANNERS (Pestañas de múltiples planners: Traslado, Estadía, Comida, etc.) */}
+          <div className="bg-white rounded-lg p-1.5 shadow-2xs border border-slate-200 flex items-center justify-between gap-1.5 shrink-0">
+            <div className="flex items-center gap-1 overflow-x-auto scrollbar-none py-0.5 flex-1 min-w-0">
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider px-1 shrink-0 flex items-center gap-1">
+                <Plane className="w-3 h-3 text-blue-600" />
+                <span className="hidden sm:inline">Planners:</span>
+              </span>
+
+              {sheetPlanners.map((p) => {
+                const isActive = p.id === activePlanner.id;
+                return (
+                  <div
+                    key={p.id}
+                    onClick={() => {
+                      if (!isActive && onSelectPlanner && p.id) {
+                        onSelectPlanner(p.id);
+                      }
+                    }}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer shrink-0 border ${
+                      isActive
+                        ? 'bg-blue-600 text-white border-blue-700 shadow-2xs'
+                        : 'bg-slate-50 hover:bg-blue-50 text-slate-700 border-slate-200 hover:border-blue-200'
+                    }`}
+                  >
+                    <span className="truncate max-w-[90px] sm:max-w-[140px]">{p.name || 'General'}</span>
+
+                    {p.targetAmount > 0 && (
+                      <span className={`text-[9px] font-mono px-1 py-0.2 rounded-xs ${
+                        isActive ? 'bg-blue-700 text-blue-100' : 'bg-slate-200/80 text-slate-600'
+                      }`}>
+                        {formatCurrency(p.targetAmount, p.targetCurrency, 0)}
+                      </span>
+                    )}
+
+                    {/* Acciones para el planner activo */}
+                    {isActive && (
+                      <div className="flex items-center gap-0.5 ml-1 pl-1 border-l border-blue-400/40">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRenamingPlannerId(p.id!);
+                            setRenamingPlannerName(p.name || '');
+                          }}
+                          className="p-0.5 hover:bg-blue-500 rounded text-blue-200 hover:text-white transition-colors cursor-pointer"
+                          title="Renombrar este planner"
+                        >
+                          <Pencil className="w-2.5 h-2.5" />
+                        </button>
+                        {sheetPlanners.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeletingPlannerId(p.id!);
+                            }}
+                            className="p-0.5 hover:bg-rose-500 rounded text-blue-200 hover:text-white transition-colors cursor-pointer"
+                            title="Eliminar este planner"
+                          >
+                            <Trash2 className="w-2.5 h-2.5" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Botón + Nuevo Planner */}
+            <button
+              type="button"
+              onClick={() => {
+                setNewPlannerName('');
+                setNewPlannerTarget('');
+                setNewPlannerCurrency(settings.displayCurrency);
+                setIsCreatingPlanner(true);
+              }}
+              className="px-2 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer shadow-2xs transition-colors"
+              title="Añadir un nuevo planner (ej: Traslado, Estadía, Comida)"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Nuevo Planner</span>
+            </button>
+          </div>
+
           {/* 1. TARJETA DE LA META (ULTRA COMPACTA Y ELEGANTE) */}
           <div className="bg-gradient-to-r from-blue-950 via-blue-900 to-indigo-950 text-white rounded-lg p-2 sm:p-2.5 shadow-xs border border-blue-700/60 space-y-1.5 shrink-0">
             {/* Métricas en 1 fila ultra compacta con Cuota p/p */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-center sm:text-left">
               <div
                 onClick={() => {
-                  setOutsideTargetInput(sheet.prepaidConfig?.targetAmount ? String(sheet.prepaidConfig.targetAmount) : '');
+                  setOutsideTargetInput(activePlanner.targetAmount ? String(activePlanner.targetAmount) : '');
                   setOutsideTargetCurrency(plannerCurrency);
                   setIsEditingTargetOutside(true);
                 }}
@@ -893,6 +1012,19 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
               return true;
             });
 
+            // Organizar nombres según orden alfabético, por abono o por deuda en asc o desc
+            filteredList.sort((a, b) => {
+              let cmp = 0;
+              if (plannerSortField === 'name') {
+                cmp = a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
+              } else if (plannerSortField === 'collected') {
+                cmp = a.collectedInBase - b.collectedInBase;
+              } else if (plannerSortField === 'remaining') {
+                cmp = a.remainingInBase - b.remainingInBase;
+              }
+              return plannerSortOrder === 'asc' ? cmp : -cmp;
+            });
+
             return (
               <div className="space-y-2">
                 {/* Search Input & Status Filter Chips */}
@@ -919,41 +1051,159 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                     )}
                   </div>
 
-                  {/* Filter Status Chips */}
-                  <div className="flex items-center gap-1 shrink-0 overflow-x-auto scrollbar-none py-0.5">
-                    <button
-                      type="button"
-                      onClick={() => setPlannerFilterStatus('all')}
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer shrink-0 border ${
-                        plannerFilterStatus === 'all'
-                          ? 'bg-blue-600 text-white border-blue-700 shadow-2xs'
-                          : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      Todos ({allMembers.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPlannerFilterStatus('pending')}
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer shrink-0 border ${
-                        plannerFilterStatus === 'pending'
-                          ? 'bg-amber-600 text-white border-amber-700 shadow-2xs'
-                          : 'bg-white text-amber-700 border-amber-200 hover:bg-amber-50'
-                      }`}
-                    >
-                      Pendientes ({pendingCount})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPlannerFilterStatus('completed')}
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer shrink-0 border ${
-                        plannerFilterStatus === 'completed'
-                          ? 'bg-emerald-600 text-white border-emerald-700 shadow-2xs'
-                          : 'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'
-                      }`}
-                    >
-                      Listos ({completedCount})
-                    </button>
+                  {/* Filter Status Chips & Sort Controls */}
+                  <div className="flex items-center justify-between sm:justify-start gap-1 shrink-0 overflow-x-auto scrollbar-none py-0.5">
+                    {/* Status chips */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setPlannerFilterStatus('all')}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer shrink-0 border ${
+                          plannerFilterStatus === 'all'
+                            ? 'bg-blue-600 text-white border-blue-700 shadow-2xs'
+                            : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        Todos ({allMembers.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPlannerFilterStatus('pending')}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer shrink-0 border ${
+                          plannerFilterStatus === 'pending'
+                            ? 'bg-amber-600 text-white border-amber-700 shadow-2xs'
+                            : 'bg-white text-amber-700 border-amber-200 hover:bg-amber-50'
+                        }`}
+                      >
+                        Pendientes ({pendingCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPlannerFilterStatus('completed')}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer shrink-0 border ${
+                          plannerFilterStatus === 'completed'
+                            ? 'bg-emerald-600 text-white border-emerald-700 shadow-2xs'
+                            : 'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'
+                        }`}
+                      >
+                        Listos ({completedCount})
+                      </button>
+                    </div>
+
+                    {/* Mobile Sort Trigger Button / Selector */}
+                    <div className="sm:hidden shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setIsSortModalOpen(true)}
+                        className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white text-slate-700 border border-slate-300 shadow-2xs flex items-center gap-1 cursor-pointer hover:bg-slate-50 active:scale-95"
+                        title="Cambiar orden de participantes"
+                      >
+                        <span className="text-slate-400">🔀</span>
+                        <span>
+                          {plannerSortField === 'name'
+                            ? `Nombre (${plannerSortOrder === 'asc' ? 'A→Z' : 'Z→A'})`
+                            : plannerSortField === 'collected'
+                            ? `Abono (${plannerSortOrder === 'desc' ? '▼ Mayor' : '▲ Menor'})`
+                            : `Deuda (${plannerSortOrder === 'desc' ? '▼ Mayor' : '▲ Menor'})`}
+                        </span>
+                      </button>
+                    </div>
+
+                    {/* Divisor para Desktop */}
+                    <div className="hidden sm:block h-4 w-px bg-slate-300 mx-0.5 shrink-0" />
+
+                    {/* Opciones de Organización en Desktop: Alfabético, Abono, Deuda con Asc/Desc */}
+                    <div className="hidden sm:flex items-center gap-1 shrink-0 bg-white rounded-md p-0.5 border border-slate-300 shadow-2xs">
+                      <span className="text-[9.5px] font-bold text-slate-500 uppercase px-1">Orden:</span>
+
+                      {/* Botón: Alfabético (Nombre) */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (plannerSortField === 'name') {
+                            setPlannerSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+                          } else {
+                            setPlannerSortField('name');
+                            setPlannerSortOrder('asc');
+                          }
+                        }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer flex items-center gap-0.5 ${
+                          plannerSortField === 'name'
+                            ? 'bg-blue-600 text-white shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                        }`}
+                        title="Organizar por orden alfabético"
+                      >
+                        <span>Nombre</span>
+                        {plannerSortField === 'name' && (
+                          <span className="text-[8.5px] font-extrabold">
+                            {plannerSortOrder === 'asc' ? 'A→Z' : 'Z→A'}
+                          </span>
+                        )}
+                      </button>
+
+                      {/* Botón: Abono */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (plannerSortField === 'collected') {
+                            setPlannerSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+                          } else {
+                            setPlannerSortField('collected');
+                            setPlannerSortOrder('desc');
+                          }
+                        }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer flex items-center gap-0.5 ${
+                          plannerSortField === 'collected'
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                        }`}
+                        title="Organizar por abono"
+                      >
+                        <span>Abono</span>
+                        {plannerSortField === 'collected' && (
+                          <span className="text-[8.5px] font-extrabold">
+                            {plannerSortOrder === 'asc' ? '▲ Menor' : '▼ Mayor'}
+                          </span>
+                        )}
+                      </button>
+
+                      {/* Botón: Deuda */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (plannerSortField === 'remaining') {
+                            setPlannerSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+                          } else {
+                            setPlannerSortField('remaining');
+                            setPlannerSortOrder('desc');
+                          }
+                        }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer flex items-center gap-0.5 ${
+                          plannerSortField === 'remaining'
+                            ? 'bg-amber-600 text-white shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                        }`}
+                        title="Organizar por deuda"
+                      >
+                        <span>Deuda</span>
+                        {plannerSortField === 'remaining' && (
+                          <span className="text-[8.5px] font-extrabold">
+                            {plannerSortOrder === 'asc' ? '▲ Menor' : '▼ Mayor'}
+                          </span>
+                        )}
+                      </button>
+
+                      {/* Botón alternar Ascendente / Descendente */}
+                      <button
+                        type="button"
+                        onClick={() => setPlannerSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                        className="px-1 py-0.5 rounded text-[9.5px] font-black text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer border-l border-slate-200"
+                        title={plannerSortOrder === 'asc' ? 'Ascendente (Clic para Descendente)' : 'Descendente (Clic para Ascendente)'}
+                      >
+                        {plannerSortOrder === 'asc' ? '▲ Asc' : '▼ Desc'}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -1262,23 +1512,43 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
                       </td>
                     )}
 
-                    {/* COLUMNA 5: TRICOUNT / BOTÓN NOMBRE MODAL */}
+                    {/* COLUMNA 5: TRICOUNT / BOTÓN NOMBRE MODAL Y PARTICIPANTES */}
                     {isTricountActive && (
                       <td className="border border-slate-300 p-0.5 text-center bg-emerald-50/30 align-middle">
                         {(() => {
                           const fullPayer = (row.payer || members[0] || 'Asignar').trim();
-                          // Garantizar mostrar como mínimo las 3 primeras letras del nombre sin colapsar a 1 letra
+                          const isCustomSplit =
+                            row.participants &&
+                            row.participants.length > 0 &&
+                            row.participants.length < members.length;
+                          const partCount = isCustomSplit ? row.participants!.length : members.length;
+
                           const shortMobile = fullPayer.length <= 4 ? fullPayer : `${fullPayer.slice(0, 3)}.`;
                           const shortDesktop = fullPayer.length > 7 ? `${fullPayer.slice(0, 6)}…` : fullPayer;
                           return (
                             <button
                               type="button"
-                              onClick={() => setSelectingPayerRowId(row.id)}
-                              className="w-full max-w-[56px] sm:max-w-[76px] mx-auto px-1 py-0.5 rounded bg-white hover:bg-emerald-100 border border-emerald-300 text-emerald-900 font-bold text-[10px] sm:text-[11px] block text-center cursor-pointer transition-colors shadow-2xs leading-tight whitespace-nowrap"
-                              title={`Pagado por: ${fullPayer}. Clic para cambiar.`}
+                              onClick={() => handleOpenRowPayerModal(row.id)}
+                              className={`w-full max-w-[62px] sm:max-w-[80px] mx-auto px-1 py-0.5 rounded border font-bold text-[10px] sm:text-[11px] block text-center cursor-pointer transition-colors shadow-2xs leading-tight ${
+                                isCustomSplit
+                                  ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-900'
+                                  : 'bg-white hover:bg-emerald-100 border-emerald-300 text-emerald-900'
+                              }`}
+                              title={`Pagado por: ${fullPayer}. ${
+                                isCustomSplit
+                                  ? `Dividido entre ${partCount} de ${members.length} miembros (${members.length - partCount} exentos).`
+                                  : 'Dividido entre todos.'
+                              } Clic para cambiar pagador o exentar miembros.`}
                             >
-                              <span className="sm:hidden">{shortMobile}</span>
-                              <span className="hidden sm:inline">{shortDesktop}</span>
+                              <div className="truncate">
+                                <span className="sm:hidden">{shortMobile}</span>
+                                <span className="hidden sm:inline">{shortDesktop}</span>
+                              </div>
+                              {isCustomSplit && (
+                                <span className="text-[8.5px] font-extrabold text-amber-800 bg-amber-200/80 px-1 rounded-xs block mx-auto leading-none mt-0.5">
+                                  {partCount}/{members.length}
+                                </span>
+                              )}
                             </button>
                           );
                         })()}
@@ -1611,8 +1881,13 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
         settings={settings}
         onUpdateSheetMembers={onUpdateSheetMembers}
         onUpdateRowPayer={(rowId, payer) => onUpdateRow(rowId, { payer })}
+        onUpdateRowParticipants={(rowId, participants) => onUpdateRow(rowId, { participants })}
         onUpdateSheetTricountMode={onUpdateSheetTricountMode}
         onUpdatePrepaidConfig={onUpdatePrepaidConfig}
+        onCreatePlanner={onCreatePlanner}
+        onSelectPlanner={onSelectPlanner}
+        onRenamePlanner={onRenamePlanner}
+        onDeletePlanner={onDeletePlanner}
         onUpdateSettledTransfers={onUpdateSettledTransfers}
         onUpdateSettledDebtors={onUpdateSettledDebtors}
         onUpdatePartialSettlements={onUpdatePartialSettlements}
@@ -1624,110 +1899,419 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
         onDeleteTricountGroup={onDeleteTricountGroup}
       />
 
-      {/* 7. MODAL RÁPIDO PARA SELECCIONAR PARTICIPANTE QUE PAGÓ */}
-      {selectingPayerRowId && (
+      {/* 7. MODAL PARA CONFIGURAR PAGADOR Y PARTICIPANTES (EXENTAR MIEMBROS) */}
+      {selectingPayerRowId && (() => {
+        const currentRow = computedRows.find((r) => r.id === selectingPayerRowId);
+        const rowAmt = currentRow ? Math.abs(currentRow.equivalents[settings.paymentCurrency]) : 0;
+        const participantCount = selectedRowParticipants.length;
+        const perPersonShare = participantCount > 0 ? rowAmt / participantCount : 0;
+        const exemptMembers = members.filter((m) => !selectedRowParticipants.includes(m));
+
+        const handleSavePayerAndParticipants = () => {
+          const isAll = selectedRowParticipants.length === members.length &&
+            members.every((m) => selectedRowParticipants.includes(m));
+          onUpdateRow(selectingPayerRowId, {
+            payer: selectedRowPayer,
+            participants: isAll ? undefined : selectedRowParticipants,
+          });
+          setSelectingPayerRowId(null);
+        };
+
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-fade-in">
+            <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden flex flex-col max-h-[90vh] animate-scale-up">
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-emerald-50/80 shrink-0">
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 rounded-md bg-emerald-600 text-white shadow-2xs">
+                    <Users className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <h3 className="font-bold text-sm text-slate-900">Configurar Gasto de Tripcount</h3>
+                    <p className="text-[11px] text-slate-500 truncate max-w-[240px]">
+                      {currentRow?.concept || 'Operación'} • {formatCurrency(rowAmt, settings.paymentCurrency, settings.decimals)}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectingPayerRowId(null)}
+                  className="p-1.5 rounded text-slate-400 hover:text-slate-700 hover:bg-white transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-4 overflow-y-auto">
+                {/* SECCIÓN 1: ¿QUIÉN PAGÓ ESTE GASTO? */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800">1. ¿Quién pagó este gasto?</span>
+                    <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                      Pagador: {selectedRowPayer || members[0]}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {members.map((m) => {
+                      const isSelected = selectedRowPayer === m;
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setSelectedRowPayer(m)}
+                          className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center justify-between transition-all cursor-pointer border ${
+                            isSelected
+                              ? 'bg-emerald-600 text-white border-emerald-700 shadow-2xs'
+                              : 'bg-slate-50 hover:bg-emerald-50 text-slate-800 border-slate-200 hover:border-emerald-300'
+                          }`}
+                        >
+                          <span className="truncate">{m}</span>
+                          {isSelected && <Check className="w-3.5 h-3.5 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Añadir nuevo participante rápido */}
+                  <div className="pt-1.5">
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const name = quickPayerName.trim();
+                        if (!name) return;
+                        if (!members.includes(name) && onUpdateSheetMembers) {
+                          onUpdateSheetMembers([...members, name]);
+                        }
+                        setSelectedRowPayer(name);
+                        if (!selectedRowParticipants.includes(name)) {
+                          setSelectedRowParticipants([...selectedRowParticipants, name]);
+                        }
+                        setQuickPayerName('');
+                      }}
+                      className="flex gap-1.5"
+                    >
+                      <input
+                        type="text"
+                        value={quickPayerName}
+                        onChange={(e) => setQuickPayerName(e.target.value)}
+                        placeholder="Añadir nueva persona..."
+                        className="flex-1 px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                      <button
+                        type="submit"
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shrink-0 cursor-pointer shadow-2xs"
+                      >
+                        + Añadir
+                      </button>
+                    </form>
+                  </div>
+                </div>
+
+                {/* SECCIÓN 2: ¿QUIÉNES COMPARTEN ESTE GASTO? (EXENTAR MIEMBROS) */}
+                <div className="pt-3 border-t border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-bold text-slate-800 block">
+                        2. ¿Entre quiénes se divide?
+                      </span>
+                      <p className="text-[10.5px] text-slate-500">
+                        Desmarca a quienes no participaron para dejarlos exentos.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRowParticipants([...members])}
+                      className="px-2 py-0.5 rounded text-[10.5px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+                    >
+                      Todos ({members.length})
+                    </button>
+                  </div>
+
+                  {/* Grid de checkboxes de participantes */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {members.map((m) => {
+                      const isParticipating = selectedRowParticipants.includes(m);
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => {
+                            if (isParticipating) {
+                              // Desmarcar / Exentar (mantener al menos 1 participante)
+                              if (selectedRowParticipants.length > 1) {
+                                setSelectedRowParticipants(selectedRowParticipants.filter((p) => p !== m));
+                              }
+                            } else {
+                              // Incluir
+                              setSelectedRowParticipants([...selectedRowParticipants, m]);
+                            }
+                          }}
+                          className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center justify-between transition-all cursor-pointer border text-left ${
+                            isParticipating
+                              ? 'bg-blue-50/80 border-blue-300 text-blue-900 shadow-2xs'
+                              : 'bg-slate-50 border-slate-200 text-slate-400 line-through hover:border-slate-300'
+                          }`}
+                        >
+                          <span className="truncate">{m}</span>
+                          <span className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded ${
+                            isParticipating ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600 no-underline'
+                          }`}>
+                            {isParticipating ? 'Participa' : 'Exento'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Resumen de división */}
+                  <div className={`p-2 rounded-lg text-xs font-medium border ${
+                    exemptMembers.length > 0
+                      ? 'bg-amber-50 border-amber-200 text-amber-950'
+                      : 'bg-slate-50 border-slate-200 text-slate-700'
+                  }`}>
+                    {exemptMembers.length > 0 ? (
+                      <div>
+                        <div className="flex items-center justify-between font-bold">
+                          <span>Dividido entre {participantCount} personas:</span>
+                          <span className="font-mono text-amber-900">
+                            {formatCurrency(perPersonShare, settings.paymentCurrency, settings.decimals)} c/u
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-amber-800 mt-0.5">
+                          Exentos (no pagan): <strong>{exemptMembers.join(', ')}</strong>
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between font-bold">
+                        <span>Dividido entre todos ({members.length} miembros):</span>
+                        <span className="font-mono text-slate-900">
+                          {formatCurrency(perPersonShare, settings.paymentCurrency, settings.decimals)} c/u
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer con Guardar */}
+              <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSelectingPayerRowId(null)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSavePayerAndParticipants}
+                  className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer flex items-center gap-1"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Guardar Cambios</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MODAL 1: CREAR NUEVO PLANNER */}
+      {isCreatingPlanner && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-fade-in">
-          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-sm w-full overflow-hidden flex flex-col max-h-[85vh] animate-scale-up">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-emerald-50/80 shrink-0">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-sm w-full overflow-hidden flex flex-col animate-scale-up">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-blue-50/80 shrink-0">
               <div className="flex items-center gap-2">
-                <span className="p-1.5 rounded-md bg-emerald-600 text-white shadow-2xs">
-                  <Users className="w-4 h-4" />
+                <span className="p-1.5 rounded-md bg-blue-600 text-white shadow-2xs">
+                  <Plane className="w-4 h-4" />
                 </span>
                 <div>
-                  <h3 className="font-bold text-sm text-slate-900">¿Quién pagó este gasto?</h3>
-                  <p className="text-[11px] text-slate-500">Selecciona o añade una persona</p>
+                  <h3 className="font-bold text-sm text-slate-900">Crear Nuevo Planner</h3>
+                  <p className="text-[11px] text-slate-500">Ej: Traslado, Estadía, Comida, Entradas</p>
                 </div>
               </div>
               <button
-                onClick={() => setSelectingPayerRowId(null)}
+                onClick={() => setIsCreatingPlanner(false)}
                 className="p-1.5 rounded text-slate-400 hover:text-slate-700 hover:bg-white transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-4 space-y-3 overflow-y-auto">
-              {/* Grid of members */}
-              <div className="space-y-1.5">
-                <span className="text-xs font-bold text-slate-700">Participantes:</span>
-                {members.length === 0 ? (
-                  <div className="p-3 bg-slate-50 rounded-lg text-xs text-slate-500 text-center">
-                    No hay participantes en la lista. Escribe uno abajo.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {members.map((m) => {
-                      const currentRow = computedRows.find((r) => r.id === selectingPayerRowId);
-                      const isCurrentPayer = (currentRow?.payer || members[0]) === m;
-                      return (
-                        <button
-                          key={m}
-                          type="button"
-                          onClick={() => {
-                            onUpdateRow(selectingPayerRowId, { payer: m });
-                            setSelectingPayerRowId(null);
-                          }}
-                          className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center justify-between transition-all cursor-pointer border ${
-                            isCurrentPayer
-                              ? 'bg-emerald-600 text-white border-emerald-700 shadow-2xs'
-                              : 'bg-slate-50 hover:bg-emerald-50 text-slate-800 border-slate-200 hover:border-emerald-300'
-                          }`}
-                        >
-                          <span className="truncate">{m}</span>
-                          {isCurrentPayer && <Check className="w-3.5 h-3.5 shrink-0" />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const name = newPlannerName.trim() || 'Nuevo Planner';
+                const targetNum = parseFloat(newPlannerTarget.replace(',', '.')) || 0;
+                if (onCreatePlanner) {
+                  onCreatePlanner(name, targetNum, newPlannerCurrency);
+                }
+                setIsCreatingPlanner(false);
+              }}
+              className="p-4 space-y-3"
+            >
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Nombre del Planner:</label>
+                <input
+                  type="text"
+                  autoFocus
+                  required
+                  value={newPlannerName}
+                  onChange={(e) => setNewPlannerName(e.target.value)}
+                  placeholder="ej: Traslado, Estadía, Comida..."
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
               </div>
 
-              {/* Quick Add participant */}
-              <div className="pt-2 border-t border-slate-200 space-y-1.5">
-                <span className="text-[11px] font-bold text-slate-600">+ Nuevo participante:</span>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const name = quickPayerName.trim();
-                    if (!name) return;
-                    if (!members.includes(name) && onUpdateSheetMembers) {
-                      onUpdateSheetMembers([...members, name]);
-                    }
-                    onUpdateRow(selectingPayerRowId, { payer: name });
-                    setQuickPayerName('');
-                    setSelectingPayerRowId(null);
-                  }}
-                  className="flex gap-1.5"
-                >
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Meta Inicial:</label>
                   <input
                     type="text"
-                    value={quickPayerName}
-                    onChange={(e) => setQuickPayerName(e.target.value)}
-                    placeholder="Nombre (ej: Daniel)"
-                    className="flex-1 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    inputMode="decimal"
+                    value={newPlannerTarget}
+                    onChange={(e) => setNewPlannerTarget(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
-                  <button
-                    type="submit"
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shrink-0 cursor-pointer shadow-2xs"
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Moneda:</label>
+                  <select
+                    value={newPlannerCurrency}
+                    onChange={(e) => setNewPlannerCurrency(e.target.value as Currency)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   >
-                    Asignar
-                  </button>
-                </form>
+                    {ALL_CURRENCIES.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-            </div>
 
-            <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
-              <button
-                type="button"
-                onClick={() => setSelectingPayerRowId(null)}
-                className="px-3 py-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
-              >
-                Cerrar
-              </button>
-            </div>
+              <div className="pt-2 border-t border-slate-200 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCreatingPlanner(false)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+                >
+                  Crear Planner
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
+
+      {/* MODAL 2: RENOMBRAR PLANNER */}
+      {renamingPlannerId && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-fade-in">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-sm w-full overflow-hidden flex flex-col animate-scale-up">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-slate-50 shrink-0">
+              <h3 className="font-bold text-sm text-slate-900">Renombrar Planner</h3>
+              <button
+                onClick={() => setRenamingPlannerId(null)}
+                className="p-1.5 rounded text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const trimmed = renamingPlannerName.trim();
+                if (trimmed && onRenamePlanner && renamingPlannerId) {
+                  onRenamePlanner(renamingPlannerId, trimmed);
+                }
+                setRenamingPlannerId(null);
+              }}
+              className="p-4 space-y-3"
+            >
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Nuevo nombre:</label>
+                <input
+                  type="text"
+                  autoFocus
+                  required
+                  value={renamingPlannerName}
+                  onChange={(e) => setRenamingPlannerName(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRenamingPlannerId(null)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+                >
+                  Guardar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: CONFIRMAR ELIMINAR PLANNER */}
+      {deletingPlannerId && (() => {
+        const targetPl = sheetPlanners.find((p) => p.id === deletingPlannerId);
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-fade-in">
+            <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-sm w-full overflow-hidden flex flex-col animate-scale-up p-4 space-y-3">
+              <div className="flex items-center gap-2 text-rose-600">
+                <div className="p-2 bg-rose-100 rounded-full">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900">¿Eliminar Planner?</h3>
+                  <p className="text-xs text-slate-500 font-semibold">{targetPl?.name || 'Planner'}</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Se eliminarán la meta y los <strong>{targetPl?.contributions?.length || 0} abonos</strong> registrados en este planner. Esta acción no se puede deshacer.
+              </p>
+
+              <div className="pt-2 border-t border-slate-200 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeletingPlannerId(null)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onDeletePlanner && deletingPlannerId) {
+                      onDeletePlanner(deletingPlannerId);
+                    }
+                    setDeletingPlannerId(null);
+                  }}
+                  className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+                >
+                  Eliminar Planner
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 8. MODAL PARA SELECCIONAR MONEDA DE LA FILA */}
       {selectingCurrencyRowId && (
@@ -1881,6 +2465,125 @@ export const SpreadsheetTable: React.FC<SpreadsheetTableProps> = ({
           context="sheets"
           onImportSheet={onImportSheet}
         />
+      )}
+
+      {/* MODAL PARA ORDENAR PARTICIPANTES EN MÓVIL / PANTALLA */}
+      {isSortModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in select-none">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-sm w-full overflow-hidden flex flex-col animate-scale-up">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-900 text-white">
+              <div className="flex items-center gap-2">
+                <span className="text-base">🔀</span>
+                <div>
+                  <h4 className="font-extrabold text-sm">Ordenar Participantes</h4>
+                  <p className="text-[10px] text-slate-400">Selecciona el criterio de organización</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSortModalOpen(false)}
+                className="p-1 rounded-lg hover:bg-white/20 text-slate-300 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Sort Options List */}
+            <div className="p-3 space-y-1.5 max-h-[70vh] overflow-y-auto">
+              {[
+                {
+                  field: 'name' as PlannerSortField,
+                  order: 'asc' as PlannerSortOrder,
+                  icon: '🔤',
+                  title: 'Nombre (A → Z)',
+                  desc: 'Orden alfabético ascendente',
+                },
+                {
+                  field: 'name' as PlannerSortField,
+                  order: 'desc' as PlannerSortOrder,
+                  icon: '🔤',
+                  title: 'Nombre (Z → A)',
+                  desc: 'Orden alfabético descendente',
+                },
+                {
+                  field: 'remaining' as PlannerSortField,
+                  order: 'desc' as PlannerSortOrder,
+                  icon: '⏳',
+                  title: 'Mayor Deuda / Falta primero (▼)',
+                  desc: 'Primero los que tienen mayor saldo pendiente',
+                },
+                {
+                  field: 'remaining' as PlannerSortField,
+                  order: 'asc' as PlannerSortOrder,
+                  icon: '⏳',
+                  title: 'Menor Deuda / Falta primero (▲)',
+                  desc: 'Primero los que deben menos o están al día',
+                },
+                {
+                  field: 'collected' as PlannerSortField,
+                  order: 'desc' as PlannerSortOrder,
+                  icon: '💰',
+                  title: 'Mayor Abono primero (▼)',
+                  desc: 'Primero quienes han aportado mayor dinero',
+                },
+                {
+                  field: 'collected' as PlannerSortField,
+                  order: 'asc' as PlannerSortOrder,
+                  icon: '💰',
+                  title: 'Menor Abono primero (▲)',
+                  desc: 'Primero quienes han aportado menor dinero',
+                },
+              ].map((opt, idx) => {
+                const isSelected = plannerSortField === opt.field && plannerSortOrder === opt.order;
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setPlannerSortField(opt.field);
+                      setPlannerSortOrder(opt.order);
+                      setIsSortModalOpen(false);
+                    }}
+                    className={`w-full text-left p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                      isSelected
+                        ? 'bg-blue-50 border-blue-500 shadow-2xs ring-1 ring-blue-500'
+                        : 'bg-white border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="text-base shrink-0">{opt.icon}</span>
+                      <div className="min-w-0">
+                        <span className={`text-xs font-bold block truncate ${isSelected ? 'text-blue-900' : 'text-slate-800'}`}>
+                          {opt.title}
+                        </span>
+                        <span className="text-[10px] text-slate-500 block truncate">
+                          {opt.desc}
+                        </span>
+                      </div>
+                    </div>
+                    {isSelected && (
+                      <span className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center shrink-0">
+                        <Check className="w-3 h-3 stroke-[3]" />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Footer */}
+            <div className="p-2.5 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIsSortModalOpen(false)}
+                className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* MODAL: HISTORIAL DE APORTES Y FECHAS DE UN PARTICIPANTE */}

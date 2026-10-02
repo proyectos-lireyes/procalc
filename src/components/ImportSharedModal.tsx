@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   X,
   Download,
@@ -16,6 +16,7 @@ import {
   CalcSharePayload,
   SheetSharePayload,
 } from '../utils/shareImporter';
+import { readClipboardTextMedia } from '../utils/mediaShare';
 
 interface ImportSharedModalProps {
   isOpen: boolean;
@@ -34,6 +35,7 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
 }) => {
   const [inputText, setInputText] = useState('');
   const [pastedStatus, setPastedStatus] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -50,16 +52,23 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
 
   const handlePasteClipboard = async () => {
     try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        setInputText(text);
+      const text = await readClipboardTextMedia();
+      if (text && text.trim()) {
+        setInputText(text.trim());
         setPastedStatus('¡Texto pegado con éxito!');
-        setTimeout(() => setPastedStatus(null), 2000);
+        setTimeout(() => setPastedStatus(null), 2500);
+        return;
       }
     } catch (e) {
-      setPastedStatus('No se pudo acceder al portapapeles. Pega manualmente en el recuadro.');
-      setTimeout(() => setPastedStatus(null), 3000);
+      console.warn('Clipboard read error:', e);
     }
+
+    // Fallback: If clipboard read could not be accessed, focus and select textarea
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
+    setPastedStatus('Portapapeles no accesible. Deja presionado el recuadro y toca Pegar.');
+    setTimeout(() => setPastedStatus(null), 4000);
   };
 
   const handleExecuteImport = (mode: 'new' | 'replace') => {
@@ -153,6 +162,7 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
             </div>
 
             <textarea
+              ref={textareaRef}
               rows={4}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}

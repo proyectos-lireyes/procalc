@@ -1,4 +1,5 @@
 import { registerPlugin, Capacitor } from '@capacitor/core';
+import { Clipboard } from '@capacitor/clipboard';
 import { toPng } from 'html-to-image';
 import { isNativeAndroidApp } from './appUpdater';
 
@@ -17,6 +18,7 @@ interface MediaSharePlugin {
     dataUrl: string;
     fileName?: string;
   }): Promise<{ success: boolean }>;
+  readClipboardText(): Promise<{ value: string }>;
 }
 
 export const MediaShare = registerPlugin<MediaSharePlugin>('MediaShare');
@@ -65,27 +67,33 @@ export async function captureElementToPng(
   const fullWidth = Math.max(elem.scrollWidth, elem.offsetWidth, 360);
   const fullHeight = Math.max(elem.scrollHeight, elem.offsetHeight);
 
-  // Adaptive pixelRatio to prevent hitting Android's max canvas limit (4096px)
-  let idealPixelRatio = 2;
-  if (fullHeight * idealPixelRatio > 3800) {
+  // Adaptive pixelRatio for ultra-high-definition zoom & crystal-sharp text
+  let idealPixelRatio = 3.0;
+  if (fullHeight * idealPixelRatio > 4000) {
+    idealPixelRatio = 2.5;
+  }
+  if (fullHeight * idealPixelRatio > 4000) {
+    idealPixelRatio = 2.0;
+  }
+  if (fullHeight * idealPixelRatio > 4000) {
     idealPixelRatio = 1.5;
   }
-  if (fullHeight * idealPixelRatio > 3800) {
+  if (fullHeight * idealPixelRatio > 4000) {
     idealPixelRatio = 1.2;
   }
-  if (fullHeight * idealPixelRatio > 3800) {
+  if (fullHeight * idealPixelRatio > 4000) {
     idealPixelRatio = 1.0;
   }
 
   try {
-    // Attempt 1: Full-height capture with adaptive resolution
+    // Attempt 1: Full-height capture with adaptive HD resolution
     const dataUrl = await toPng(elem, {
       pixelRatio: idealPixelRatio,
       width: fullWidth,
       height: fullHeight,
       backgroundColor: '#ffffff',
       cacheBust: true,
-      skipFonts: true,
+      skipFonts: false,
       style: {
         width: `${fullWidth}px`,
         height: `${fullHeight}px`,
@@ -94,7 +102,7 @@ export async function captureElementToPng(
         overflow: 'visible',
         transform: 'none',
         margin: '0 auto',
-      },
+      } as any,
       filter: (domNode) => {
         if (domNode instanceof HTMLElement && domNode.classList?.contains('no-export')) {
           return false;
@@ -318,4 +326,45 @@ export async function copyImageMediaToClipboard(options: {
 
   // 4. Download image as final fallback if clipboard is unavailable
   return downloadImageMedia({ dataUrl, blob: targetBlob, fileName });
+}
+
+/**
+ * Reads text from clipboard with native Android Capacitor support & Web fallback
+ */
+export async function readClipboardTextMedia(): Promise<string> {
+  // 1. Try official @capacitor/clipboard plugin
+  try {
+    const result = await Clipboard.read();
+    if (result && typeof result.value === 'string' && result.value.trim().length > 0) {
+      return result.value.trim();
+    }
+  } catch (capErr) {
+    // Ignore and fallback
+  }
+
+  // 2. Try Native Android Capacitor custom MediaShare plugin
+  if (isNativeAndroidApp()) {
+    try {
+      const res = await MediaShare.readClipboardText();
+      if (res && typeof res.value === 'string' && res.value.trim().length > 0) {
+        return res.value.trim();
+      }
+    } catch (err) {
+      console.warn('Native MediaShare.readClipboardText error, trying web fallback:', err);
+    }
+  }
+
+  // 3. Try Web Navigator Async Clipboard API
+  if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && typeof text === 'string' && text.trim().length > 0) {
+        return text.trim();
+      }
+    } catch (err) {
+      console.warn('navigator.clipboard.readText failed or permission denied:', err);
+    }
+  }
+
+  return '';
 }

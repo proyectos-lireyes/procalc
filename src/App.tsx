@@ -42,6 +42,11 @@ import { ClosedSheetsModal } from './components/ClosedSheetsModal';
 import { TricountGroupsModal } from './components/TricountGroupsModal';
 import { checkGitHubRelease, AppReleaseInfo, DEFAULT_GITHUB_REPO } from './services/updateService';
 import { SheetSharePayload } from './utils/shareImporter';
+import {
+  createDefaultPrepaidConfig,
+  getSheetPlanners,
+  getActivePlanner,
+} from './utils/tricountPrepaid';
 
 const STORAGE_SHEETS_KEY = 'multicurrency_sheets_v3';
 const STORAGE_CLOSED_SHEETS_KEY = 'multicurrency_closed_sheets_v3';
@@ -617,6 +622,8 @@ export default function App() {
                 isTricountActive: data.isTricountActive ?? s.isTricountActive,
                 tricountMode: data.tricountMode ?? s.tricountMode,
                 prepaidConfig: data.prepaidConfig ?? s.prepaidConfig,
+                planners: data.planners ?? s.planners,
+                activePlannerId: data.activePlannerId ?? s.activePlannerId,
                 settledTransfers: data.settledTransfers ?? s.settledTransfers,
                 settledDebtors: data.settledDebtors ?? s.settledDebtors,
                 partialSettlements: data.partialSettlements ?? s.partialSettlements,
@@ -634,6 +641,8 @@ export default function App() {
         isTricountActive: data.isTricountActive ?? false,
         tricountMode: data.tricountMode,
         prepaidConfig: data.prepaidConfig,
+        planners: data.planners,
+        activePlannerId: data.activePlannerId,
         settledTransfers: data.settledTransfers,
         settledDebtors: data.settledDebtors,
         partialSettlements: data.partialSettlements,
@@ -767,6 +776,9 @@ export default function App() {
                     customQuotas: {},
                   }
                 : undefined,
+              planners: s.planners
+                ? s.planners.map((p) => ({ ...p, contributions: [], customQuotas: {} }))
+                : undefined,
               updatedAt: Date.now(),
             }
           : s
@@ -809,9 +821,107 @@ export default function App() {
     );
   };
 
+  // Multiple Planners Handlers
+  const handleCreatePlanner = (name: string, targetAmount = 0, currency?: Currency) => {
+    const trimmed = name.trim() || 'Nuevo Planner';
+    const newPlanner = createDefaultPrepaidConfig(
+      targetAmount || 0,
+      currency || settings.displayCurrency,
+      trimmed
+    );
+    setSheets((prev) =>
+      prev.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const currentPlanners = getSheetPlanners(s);
+        const updatedPlanners = [...currentPlanners, newPlanner];
+        return {
+          ...s,
+          planners: updatedPlanners,
+          activePlannerId: newPlanner.id,
+          prepaidConfig: newPlanner,
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  };
+
+  const handleSelectPlanner = (plannerId: string) => {
+    setSheets((prev) =>
+      prev.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const currentPlanners = getSheetPlanners(s);
+        const found = currentPlanners.find((p) => p.id === plannerId) || currentPlanners[0];
+        return {
+          ...s,
+          activePlannerId: found?.id || plannerId,
+          prepaidConfig: found,
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  };
+
+  const handleRenamePlanner = (plannerId: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    setSheets((prev) =>
+      prev.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const currentPlanners = getSheetPlanners(s);
+        const updatedPlanners = currentPlanners.map((p) =>
+          p.id === plannerId ? { ...p, name: trimmed } : p
+        );
+        const currentActive = updatedPlanners.find((p) => p.id === (s.activePlannerId || plannerId));
+        return {
+          ...s,
+          planners: updatedPlanners,
+          prepaidConfig: currentActive || s.prepaidConfig,
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  };
+
+  const handleDeletePlanner = (plannerId: string) => {
+    setSheets((prev) =>
+      prev.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const currentPlanners = getSheetPlanners(s);
+        const remaining = currentPlanners.filter((p) => p.id !== plannerId);
+        const finalPlanners =
+          remaining.length > 0
+            ? remaining
+            : [createDefaultPrepaidConfig(0, settings.displayCurrency, 'General')];
+        const nextActive = finalPlanners[0];
+        return {
+          ...s,
+          planners: finalPlanners,
+          activePlannerId: nextActive.id,
+          prepaidConfig: nextActive,
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  };
+
   const handleUpdateSheetPrepaidConfig = (config: TricountPrepaidConfig) => {
     setSheets((prev) =>
-      prev.map((s) => (s.id === activeSheetId ? { ...s, prepaidConfig: config, updatedAt: Date.now() } : s))
+      prev.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const currentPlanners = getSheetPlanners(s);
+        const targetId = config.id || s.activePlannerId || currentPlanners[0]?.id || 'planner_default';
+        const exists = currentPlanners.some((p) => p.id === targetId);
+        const updatedPlanners = exists
+          ? currentPlanners.map((p) => (p.id === targetId ? { ...p, ...config, id: targetId } : p))
+          : [...currentPlanners, { ...config, id: targetId }];
+        return {
+          ...s,
+          prepaidConfig: { ...config, id: targetId },
+          activePlannerId: targetId,
+          planners: updatedPlanners,
+          updatedAt: Date.now(),
+        };
+      })
     );
   };
 
@@ -1007,6 +1117,10 @@ export default function App() {
               onToggleSheetTricount={handleToggleSheetTricount}
               onUpdateSheetTricountMode={handleUpdateSheetTricountMode}
               onUpdatePrepaidConfig={handleUpdateSheetPrepaidConfig}
+              onCreatePlanner={handleCreatePlanner}
+              onSelectPlanner={handleSelectPlanner}
+              onRenamePlanner={handleRenamePlanner}
+              onDeletePlanner={handleDeletePlanner}
               onUpdateSettledTransfers={handleUpdateSettledTransfers}
               onUpdateSettledDebtors={handleUpdateSettledDebtors}
               onUpdatePartialSettlements={handleUpdateSheetPartialSettlements}

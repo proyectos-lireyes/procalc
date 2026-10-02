@@ -247,4 +247,31 @@ public class MediaSharePlugin extends Plugin {
             }
         });
     }
+
+    @PluginMethod
+    public void readClipboardText(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            try {
+                Context context = getContext();
+                ClipboardManager clipboard = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard != null && clipboard.hasPrimaryClip()) {
+                    ClipData clip = clipboard.getPrimaryClip();
+                    if (clip != null && clip.getItemCount() > 0) {
+                        ClipData.Item item = clip.getItemAt(0);
+                        CharSequence text = item.coerceToText(context);
+                        JSObject ret = new JSObject();
+                        ret.put("value", text != null ? text.toString() : "");
+                        call.resolve(ret);
+                        return;
+                    }
+                }
+                JSObject ret = new JSObject();
+                ret.put("value", "");
+                call.resolve(ret);
+            } catch (Exception e) {
+                Log.e(TAG, "Error leyendo portapapeles", e);
+                call.reject("Error leyendo portapapeles: " + e.getMessage());
+            }
+        });
+    }
 }
